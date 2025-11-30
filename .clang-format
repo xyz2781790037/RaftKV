@@ -1,0 +1,13 @@
+BasedOnStyle: Google
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+
+BraceWrapping:
+  AfterStruct: true         # message 和 struct 都会换行内容
+  AfterEnum: true
+  AfterClass: true
+  AfterUnion: true
+  BeforeElse: false
+  SplitEmptyRecord: false

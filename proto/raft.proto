@@ -1,0 +1,52 @@
+syntax = "proto3";
+package raft;
+option go_package = "RaftKV/proto/raftapi";
+
+// enum PeerState{
+//     UNKNOWN = 0;
+//     LEADER = 1;
+//     FOLLOWER = 2;
+//     CANDIDATE = 3;
+// }
+
+message LogEntry{
+    any Command = 1;
+    int Term = 2;
+}
+
+message RequestVoteArgs {
+    int64 Term = 1;
+    int64 CandidateId = 2;
+    int64 LastLogIndex = 3;
+    int64 LastLogTerm = 1;
+}
+message RequestVoteReply {
+    int64 Term = 1;
+    bool VoteGranted = 2;
+}
+
+message AppendEntriesArgs{
+    int64 Term = 1;
+    int64 LeaderId = 2;
+    int64 PrevLogIndex = 3;
+    int64 PrevLogTerm = 4;
+    repeated LogEntry Entries = 5;
+    int64 LeaderCommit = 6;
+}
+message AppendEntriesReply{
+    int64 Term = 1;
+    bool Success = 2;
+    int64 ConflictIndex = 3;
+    int64 ConflictTerm = 4;
+}
+
+message InstallSnapshotRequest {
+    int64 term = 1;
+    string leader_id = 2;
+    int64 last_included_index = 3;
+    int64 last_included_term = 4;
+    bytes data = 5;
+}
+message InstallSnapshotResponse {
+    int64 term = 1;
+}
