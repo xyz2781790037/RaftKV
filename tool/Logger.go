@@ -97,3 +97,5 @@ func NewLogger(level slog.Level) *slog.Logger {
 	handler := NewColoredHandler(io.Writer(os.Stdout), opts)
 	return slog.New(handler)
 }
+
+var Log *slog.Logger = NewLogger(slog.LevelDebug)
