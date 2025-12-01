@@ -1,0 +1,40 @@
+syntax = "proto3";
+package kvraft;
+
+option go_package = "./rpc";
+
+enum Error {
+    ERR_UNKNOWN = 0;
+
+    OK = 1;
+    ERR_NO_KEY = 2;
+    ERR_VERSION = 3;
+
+    ERR_MAYBE = 4;
+    ERR_WRONG_LEADER = 5;
+    ERR_WRONG_GROUP = 6;
+}
+
+message PutArgs {
+    string key = 1;
+    string value = 2;
+    uint64 version = 3;
+}
+
+message PutReply {
+    Error err = 1;
+}
+message GetArgs {
+    string key = 1;
+}
+
+message GetReply {
+    string value = 1;
+    uint64 version = 2;
+    Error err = 3;
+}
+
+service RaftKV {
+    rpc Get(GetArgs) returns (GetReply);
+    rpc Put(PutArgs) returns (PutReply);
+}
