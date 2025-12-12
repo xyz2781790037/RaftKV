@@ -1,7 +1,7 @@
 syntax = "proto3";
 package kvraft;
 
-option go_package = "./rpc";
+option go_package = "./kvpb";
 
 enum Error {
     ERR_UNKNOWN = 0;

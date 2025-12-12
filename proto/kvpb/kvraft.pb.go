@@ -4,7 +4,7 @@
 // 	protoc        v3.21.12
 // source: kvraft.proto
 
-package rpc
+package kvpb
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -318,7 +318,7 @@ const file_kvraft_proto_rawDesc = "" +
 	"\x0fERR_WRONG_GROUP\x10\x062\\\n" +
 	"\x06RaftKV\x12(\n" +
 	"\x03Get\x12\x0f.kvraft.GetArgs\x1a\x10.kvraft.GetReply\x12(\n" +
-	"\x03Put\x12\x0f.kvraft.PutArgs\x1a\x10.kvraft.PutReplyB\aZ\x05./rpcb\x06proto3"
+	"\x03Put\x12\x0f.kvraft.PutArgs\x1a\x10.kvraft.PutReplyB\bZ\x06./kvpbb\x06proto3"
 
 var (
 	file_kvraft_proto_rawDescOnce sync.Once

@@ -4,7 +4,7 @@
 // - protoc             v3.21.12
 // source: raft.proto
 
-package raftapi
+package raftpb
 
 import (
 	context "context"

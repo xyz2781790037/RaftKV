@@ -4,7 +4,7 @@
 // - protoc             v3.21.12
 // source: kvraft.proto
 
-package rpc
+package kvpb
 
 import (
 	context "context"

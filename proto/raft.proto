@@ -1,6 +1,6 @@
 syntax = "proto3";
 package raft;
-option go_package = "./raftapi";
+option go_package = "./raftpb";
 
 enum PeerState{
     UNKNOWN = 0;
