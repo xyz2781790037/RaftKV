@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"sync"
 
-	pb "RaftKV/proto/raftapi"
+	pb "RaftKV/proto/raftpb"
 	"google.golang.org/protobuf/proto"
 )
 
