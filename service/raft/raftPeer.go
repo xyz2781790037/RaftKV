@@ -1,7 +1,7 @@
 package raft
 
 import (
-	pb "RaftKV/proto/raftapi"
+	pb "RaftKV/proto/raftpb"
 	"RaftKV/tool"
 	"context"
 	"sync"
