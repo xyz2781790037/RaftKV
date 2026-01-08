@@ -9,13 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	// "time"
+	pb "RaftKV/proto/raftpb"
 )
 
-type LogEntry struct {
-	Command interface{} // 日志条目包含的命令
-	Term    int64       // 日志条目的任期号
-}
 type PeerState int64
 
 const (
@@ -35,7 +31,7 @@ type Raft struct {
 	votedFor    int64
 	votes       int32
 
-	log []LogEntry // 日志条目，包含命令和任期号
+	log []*pb.LogEntry // 日志条目，包含命令和任期号
 	// volatile state on all servers
 	commitIndex int64 // 已被集群大多数节点提交的日志条目索引
 	lastApplied int64 // 此节点已应用到状态机的日志条目索引
@@ -95,37 +91,11 @@ func (rf *Raft) PersistBytes() int64 {
 	return 0
 }
 
-type InstallSnapshotArgs struct {
-	Term              int64  // 领导者任期
-	LeaderId          int64  // 领导者 ID
-	LastIncludedIndex int64  // 快照的最后一个日志条目索引，包括在内
-	LastIncludedTerm  int64  // 快照的最后一个日志条目任期
-	Data              []byte // 快照数据
-}
-
-type InstallSnapshotReply struct {
-	Term int64 // 当前任期，让领导者更新自己的任期
-}
-
 func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 
 }
 
-type RequestVoteArgs struct {
-	// Your data here (3A, 3B).
-	Term         int64 // 候选人的任期
-	CandidateId  int64 // 候选人的 ID
-	LastLogIndex int64 // 候选人的最后日志条目
-	LastLogTerm  int64 // 候选人的最后日志条目的 任期
-}
-
-type RequestVoteReply struct {
-	// Your data here (3A).
-	Term        int64 // 当前任期，让候选人更新自己的任期
-	VoteGranted bool  // 候选人是否获得投票
-}
-
-func (rf *Raft) Propose(command any) (int64, int64, bool) {
+func (rf *Raft) Propose(command []byte) (int64, int64, bool) {
 	var index int64 = -1
 	var term int64 = -1
 	rf.mu.Lock()
@@ -135,7 +105,7 @@ func (rf *Raft) Propose(command any) (int64, int64, bool) {
 	}
 	index = rf.getLastLogIndex() + 1
 	term = rf.currentTerm
-	rf.log = append(rf.log, LogEntry{
+	rf.log = append(rf.log, &pb.LogEntry{
 		Term:    term,
 		Command: command,
 	})
@@ -146,8 +116,8 @@ func (rf *Raft) Propose(command any) (int64, int64, bool) {
 }
 func (rf *Raft) Shutdown() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
-	// close(rf.shutdownCh) // 关闭所有计时器
+	// 关闭所有计时器
+	close(rf.shutdownCh)
 }
 
 func (rf *Raft) killed() bool {
@@ -207,22 +177,46 @@ func (rf *Raft) electionTimer() {
 		}
 	}
 }
-
-type AppendEntriesArgs struct {
-	Term         int64      // 领导者任期
-	LeaderId     int64      // 领导者 ID：让跟随者知道领导者是谁
-	PrevLogIndex int64      // 领导者的nextIndex[i] - 1
-	PrevLogTerm  int64      // 领导者的log[prevLogIndex].Term
-	Entries      []LogEntry // 日志条目，以便将新条目附加到日志，如果是新领导者，则为空
-	LeaderCommit int64      // 领导者已提交的日志条目索引
+func (rf *Raft) heartbeatTimer(){
+	timer := time.NewTimer(StableHeartbeatTimeout())
+	defer timer.Stop()
+	for !rf.killed(){
+		select{
+		case <-timer.C:
+			rf.mu.Lock()
+			isLeader := rf.state == Leader
+			rf.mu.Unlock()
+			if isLeader{
+				select {
+				case rf.heartbeatCh <- struct{}{}:
+				default:
+				}
+			}
+			timer.Reset(StableHeartbeatTimeout())
+		case <-rf.sendHeartbeatAtOnceCh:
+			if !timer.Stop(){
+				<-timer.C
+			}
+			timer.Reset(0)
+		case <-rf.shutdownCh:
+			if !timer.Stop(){
+				<-timer.C
+			}
+			return
+		}
+	}
 }
-
-type AppendEntriesReply struct {
-	Term    int64 // 当前任期号，以便领导者更新自己的任期号
-	Success bool  // 成功附加日志条目到跟随者的日志
-	// 下面两个字段用于处理冲突
-	ConflictIndex int64 // 冲突的日志条目索引，nextIndex[i] = ConflictIndex
-	ConflictTerm  int64 // 冲突的日志条目任期号
+func (rf *Raft) resetElectionTimer() {
+	select {
+	case rf.resetElectionTimerCh <- struct{}{}:
+	default:
+	}
+}
+func (rf *Raft) sendHeartbeatAtOnce() {
+	select {
+	case rf.sendHeartbeatAtOnceCh <- struct{}{}:
+	default:
+	}
 }
 
 func Make(peers []*RaftPeer, me int64,
@@ -253,22 +247,7 @@ func Make(peers []*RaftPeer, me int64,
 func (rf *Raft) applier() {
 
 }
-func RandomElectionTimeout() time.Duration {
-	// 测试器要求你的 Raft 在旧 leader 失败后的 5 秒内选出一个新的 leader。
-	return time.Duration(250+rand.Intn(400)) * time.Millisecond
-}
-func (rf *Raft) resetElectionTimer() {
-	select {
-	case rf.resetElectionTimerCh <- struct{}{}:
-	default:
-	}
-}
-func (rf *Raft) sendHeartbeatAtOnce() {
-	select {
-	case rf.sendHeartbeatAtOnceCh <- struct{}{}:
-	default:
-	}
-}
+
 func Len(command any) int64 {
 	v := reflect.ValueOf(command)
 
@@ -278,4 +257,12 @@ func Len(command any) int64 {
 	default:
 		return 0
 	}
+}
+const HeartbeatTimeout = 100
+func RandomElectionTimeout() time.Duration {
+	return time.Duration(250+rand.Intn(400)) * time.Millisecond
+}
+func StableHeartbeatTimeout() time.Duration {
+	// 测试器要求 leader 每秒发送检测信号 RPC 不超过 10 次。
+	return time.Duration(HeartbeatTimeout) * time.Millisecond
 }
