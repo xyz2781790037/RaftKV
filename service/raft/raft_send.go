@@ -39,6 +39,7 @@ func (rf *Raft) sendRequestVote() {
 			}
 			if reply.Term > rf.currentTerm {
 				rf.becomeFollower(reply.Term)
+				rf.persist()
 				return
 			}
 			if reply.VoteGranted {
@@ -105,6 +106,7 @@ func (rf *Raft) sendAppendEntries() {
 			}
 			if reply.Term > rf.currentTerm {
 				rf.becomeFollower(reply.Term)
+				rf.persist()
 				return
 			}
 			if reply.Success {
@@ -208,13 +210,11 @@ func (rf *Raft) becomeCandidate() {
 	rf.currentTerm++
 	rf.votedFor = int64(rf.me)
 	rf.votes = 1
-	rf.persist()
 }
 func (rf *Raft) becomeFollower(term int64) {
 	rf.state = Follower
 	rf.votedFor = -1
 	rf.currentTerm = term
-	rf.persist()
 }
 func (rf *Raft) becomeLeader() {
 	rf.state = Leader

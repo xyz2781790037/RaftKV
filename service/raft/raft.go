@@ -2,14 +2,15 @@ package raft
 
 import (
 	// "bytes"
+	pb "RaftKV/proto/raftpb"
 	"RaftKV/service/raftapi"
 	"RaftKV/service/storage"
+	"RaftKV/tool"
 	"math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
-	pb "RaftKV/proto/raftpb"
 )
 
 type PeerState int64
@@ -45,14 +46,15 @@ type Raft struct {
 	electionCh            chan struct{} // 选举定时器超时通知通道
 	heartbeatCh           chan struct{} // 心跳定时器超时通知通道
 	shutdownCh            chan struct{} // 当节点被杀死时，关闭所有通道
-	applyCh              chan raftapi.ApplyMsg
-	applyCond             *sync.Cond            // 用于通知 ApplyMsg 的条件变量
+	applyCh               chan raftapi.ApplyMsg
+	applyCond             *sync.Cond // 用于通知 ApplyMsg 的条件变量
 	// for 3D
 	lastIncludedIndex int64 // 快照的最后一个日志条目索引 // 所有以rf.log为基础的索引都要减去这个值
 	lastIncludedTerm  int64 // 快照的最后一个日志条目任期
 }
-func (rf *Raft) getLogTerm(index int64)int64{
-	if index == rf.lastIncludedIndex{
+
+func (rf *Raft) getLogTerm(index int64) int64 {
+	if index == rf.lastIncludedIndex {
 		return rf.lastIncludedTerm
 	}
 	relativeIndex := index - rf.lastIncludedIndex
@@ -61,13 +63,13 @@ func (rf *Raft) getLogTerm(index int64)int64{
 	}
 	return rf.log[relativeIndex].Term
 }
-func (rf *Raft)getLastLogIndex() int64{
-	if len(rf.log) == 0{
+func (rf *Raft) getLastLogIndex() int64 {
+	if len(rf.log) == 0 {
 		return int64(rf.lastIncludedIndex)
 	}
 	return rf.lastIncludedIndex + Len(rf.log)
 }
-func (rf *Raft) getLastLogTerm() int64{
+func (rf *Raft) getLastLogTerm() int64 {
 	if len(rf.log) == 0 {
 		return rf.lastIncludedTerm
 	}
@@ -81,18 +83,50 @@ func (rf *Raft) GetState() (int64, bool) {
 	return term, isLeader
 }
 func (rf *Raft) persist() {
-
+	rf.stateStore.SaveState(rf.currentTerm, rf.votedFor)
+	rf.logStore.SaveLogs(rf.log)
 }
 func (rf *Raft) readPersist(data []byte) {
+	term, votedFor, okState := rf.stateStore.LoadState()
+	if okState {
+		rf.currentTerm = term
+		rf.votedFor = votedFor
+	} else {
+		// 第一次启动，初始化默认值
+		rf.currentTerm = 0
+		rf.votedFor = -1
+	}
 
-}
-
-func (rf *Raft) PersistBytes() int64 {
-	return 0
+	snapMeta, _, okSnap := rf.logStore.LoadSnapshot()
+	if okSnap && snapMeta != nil {
+        rf.lastIncludedIndex = snapMeta.LastIncludedIndex
+        rf.lastIncludedTerm = snapMeta.LastIncludedTerm
+        // 注意：snapshotData (第二个返回值) 在这里不需要处理
+        // 因为应用层 (KVServer) 会自己加载快照来恢复状态机
+    } else {
+        rf.lastIncludedIndex = 0
+        rf.lastIncludedTerm = 0
+    }
+	logs, okLog := rf.logStore.LoadLogs()
+    if okLog {
+        rf.log = logs
+    } else {
+        rf.log = make([]*pb.LogEntry, 0)
+    }
 }
 
 func (rf *Raft) Snapshot(index int64, snapshot []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	if rf.killed(){
+		return
+	}
+	if index <= rf.lastIncludedIndex{
+		return
+	}
+	sliceIndex := index - rf.lastIncludedIndex
+	var lastIncludedTerm
 }
 
 func (rf *Raft) Propose(command []byte) (int64, int64, bool) {
@@ -101,7 +135,7 @@ func (rf *Raft) Propose(command []byte) (int64, int64, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if rf.state != Leader || rf.killed() {
-		return index,term, false
+		return index, term, false
 	}
 	index = rf.getLastLogIndex() + 1
 	term = rf.currentTerm
@@ -112,7 +146,7 @@ func (rf *Raft) Propose(command []byte) (int64, int64, bool) {
 	rf.persist()
 	// 立马发送心跳
 	rf.sendHeartbeatAtOnce()
-	return index,term, true
+	return index, term, true
 }
 func (rf *Raft) Shutdown() {
 	atomic.StoreInt32(&rf.dead, 1)
@@ -177,16 +211,16 @@ func (rf *Raft) electionTimer() {
 		}
 	}
 }
-func (rf *Raft) heartbeatTimer(){
+func (rf *Raft) heartbeatTimer() {
 	timer := time.NewTimer(StableHeartbeatTimeout())
 	defer timer.Stop()
-	for !rf.killed(){
-		select{
+	for !rf.killed() {
+		select {
 		case <-timer.C:
 			rf.mu.Lock()
 			isLeader := rf.state == Leader
 			rf.mu.Unlock()
-			if isLeader{
+			if isLeader {
 				select {
 				case rf.heartbeatCh <- struct{}{}:
 				default:
@@ -194,12 +228,12 @@ func (rf *Raft) heartbeatTimer(){
 			}
 			timer.Reset(StableHeartbeatTimeout())
 		case <-rf.sendHeartbeatAtOnceCh:
-			if !timer.Stop(){
+			if !timer.Stop() {
 				<-timer.C
 			}
 			timer.Reset(0)
 		case <-rf.shutdownCh:
-			if !timer.Stop(){
+			if !timer.Stop() {
 				<-timer.C
 			}
 			return
@@ -245,7 +279,65 @@ func Make(peers []*RaftPeer, me int64,
 	return rf
 }
 func (rf *Raft) applier() {
+	for !rf.killed() {
+		rf.mu.Lock()
+		for rf.commitIndex <= rf.lastApplied && rf.lastIncludedIndex <= rf.lastApplied {
+			rf.applyCond.Wait()
+		}
+		if rf.killed() {
+			rf.mu.Unlock()
+			return
+		}
+		if rf.lastApplied < rf.lastIncludedIndex {
+			_, snapshotData, ok := rf.logStore.LoadSnapshot()
+			if !ok {
+				tool.Log.Error("Failed to load snapshot in applier")
+				snapshotData = nil
+			}
+			snapshotMsg := raftapi.ApplyMsg{
+				CommandValid:  false,
+				SnapshotValid: true,
+				Snapshot:      snapshotData,
+				SnapshotTerm:  rf.lastIncludedTerm,
+				SnapshotIndex: rf.lastIncludedIndex,
+			}
+			rf.lastApplied = rf.lastIncludedIndex
 
+			rf.mu.Unlock()
+			rf.applyCh <- snapshotMsg
+			continue
+		}
+		if rf.lastApplied < rf.commitIndex {
+			startIndex := rf.lastApplied + 1
+			endIndex := rf.commitIndex
+			count := endIndex - startIndex + 1
+			applyMsgs := make([]raftapi.ApplyMsg, count)
+			var i int64 = 0
+			for ; i < count; i++ {
+				logIndex := startIndex + i
+				sliceIndex := logIndex - rf.lastIncludedIndex
+				if sliceIndex < 0 || sliceIndex > Len(rf.log) {
+					tool.Log.Error("Applier index out of bound", "index", sliceIndex, "logLen", len(rf.log))
+					break
+				}
+				applyMsgs[i] = raftapi.ApplyMsg{
+					CommandValid:  true,
+					Command:       rf.log[sliceIndex].Command,
+					CommandIndex:  logIndex,
+					SnapshotValid: false,
+				}
+			}
+			// 乐观更新 lastApplied
+			rf.lastApplied = endIndex
+			rf.mu.Unlock()
+
+			for _, msg := range applyMsgs {
+				rf.applyCh <- msg
+			}
+			continue
+		}
+		rf.mu.Unlock()
+	}
 }
 
 func Len(command any) int64 {
@@ -258,7 +350,9 @@ func Len(command any) int64 {
 		return 0
 	}
 }
+
 const HeartbeatTimeout = 100
+
 func RandomElectionTimeout() time.Duration {
 	return time.Duration(250+rand.Intn(400)) * time.Millisecond
 }
