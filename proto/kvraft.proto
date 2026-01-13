@@ -15,17 +15,21 @@ enum Error {
     ERR_WRONG_GROUP = 6;
 }
 
-message PutArgs {
+message PutAppendArgs {
     string key = 1;
     string value = 2;
-    uint64 version = 3;
+    string Op = 3;
+    int64 clientId = 4;
+    int64 requestId = 5;
 }
 
-message PutReply {
+message PutAppendReply {
     Error err = 1;
 }
 message GetArgs {
     string key = 1;
+    int64 clientId = 2;
+    int64 requestId = 3;
 }
 
 message GetReply {
@@ -33,8 +37,12 @@ message GetReply {
     uint64 version = 2;
     Error err = 3;
 }
+message KVSnapshot {
+    map<string, string> Data = 1;
+    map<int64, int64> LastOperations = 2;
+}
 
 service RaftKV {
     rpc Get(GetArgs) returns (GetReply);
-    rpc Put(PutArgs) returns (PutReply);
+    rpc PutAppend(PutAppendArgs) returns (PutAppendReply);
 }

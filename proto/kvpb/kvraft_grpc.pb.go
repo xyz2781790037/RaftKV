@@ -19,8 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RaftKV_Get_FullMethodName = "/kvraft.RaftKV/Get"
-	RaftKV_Put_FullMethodName = "/kvraft.RaftKV/Put"
+	RaftKV_Get_FullMethodName       = "/kvraft.RaftKV/Get"
+	RaftKV_PutAppend_FullMethodName = "/kvraft.RaftKV/PutAppend"
 )
 
 // RaftKVClient is the client API for RaftKV service.
@@ -28,7 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RaftKVClient interface {
 	Get(ctx context.Context, in *GetArgs, opts ...grpc.CallOption) (*GetReply, error)
-	Put(ctx context.Context, in *PutArgs, opts ...grpc.CallOption) (*PutReply, error)
+	PutAppend(ctx context.Context, in *PutAppendArgs, opts ...grpc.CallOption) (*PutAppendReply, error)
 }
 
 type raftKVClient struct {
@@ -49,10 +49,10 @@ func (c *raftKVClient) Get(ctx context.Context, in *GetArgs, opts ...grpc.CallOp
 	return out, nil
 }
 
-func (c *raftKVClient) Put(ctx context.Context, in *PutArgs, opts ...grpc.CallOption) (*PutReply, error) {
+func (c *raftKVClient) PutAppend(ctx context.Context, in *PutAppendArgs, opts ...grpc.CallOption) (*PutAppendReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PutReply)
-	err := c.cc.Invoke(ctx, RaftKV_Put_FullMethodName, in, out, cOpts...)
+	out := new(PutAppendReply)
+	err := c.cc.Invoke(ctx, RaftKV_PutAppend_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func (c *raftKVClient) Put(ctx context.Context, in *PutArgs, opts ...grpc.CallOp
 // for forward compatibility.
 type RaftKVServer interface {
 	Get(context.Context, *GetArgs) (*GetReply, error)
-	Put(context.Context, *PutArgs) (*PutReply, error)
+	PutAppend(context.Context, *PutAppendArgs) (*PutAppendReply, error)
 	mustEmbedUnimplementedRaftKVServer()
 }
 
@@ -78,8 +78,8 @@ type UnimplementedRaftKVServer struct{}
 func (UnimplementedRaftKVServer) Get(context.Context, *GetArgs) (*GetReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Get not implemented")
 }
-func (UnimplementedRaftKVServer) Put(context.Context, *PutArgs) (*PutReply, error) {
-	return nil, status.Error(codes.Unimplemented, "method Put not implemented")
+func (UnimplementedRaftKVServer) PutAppend(context.Context, *PutAppendArgs) (*PutAppendReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutAppend not implemented")
 }
 func (UnimplementedRaftKVServer) mustEmbedUnimplementedRaftKVServer() {}
 func (UnimplementedRaftKVServer) testEmbeddedByValue()                {}
@@ -120,20 +120,20 @@ func _RaftKV_Get_Handler(srv interface{}, ctx context.Context, dec func(interfac
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RaftKV_Put_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PutArgs)
+func _RaftKV_PutAppend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutAppendArgs)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RaftKVServer).Put(ctx, in)
+		return srv.(RaftKVServer).PutAppend(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RaftKV_Put_FullMethodName,
+		FullMethod: RaftKV_PutAppend_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RaftKVServer).Put(ctx, req.(*PutArgs))
+		return srv.(RaftKVServer).PutAppend(ctx, req.(*PutAppendArgs))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -150,8 +150,8 @@ var RaftKV_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _RaftKV_Get_Handler,
 		},
 		{
-			MethodName: "Put",
-			Handler:    _RaftKV_Put_Handler,
+			MethodName: "PutAppend",
+			Handler:    _RaftKV_PutAppend_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

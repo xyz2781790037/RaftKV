@@ -43,7 +43,7 @@ message AppendEntriesReply{
 
 message InstallSnapshotArgs {
     int64 Term = 1;
-    string leaderId = 2;
+    int64 leaderId = 2;
     int64 LastIncludedIndex = 3;
     int64 LastIncludedTerm = 4;
     bytes Data = 5;

@@ -408,7 +408,7 @@ func (x *AppendEntriesReply) GetConflictTerm() int64 {
 type InstallSnapshotArgs struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Term              int64                  `protobuf:"varint,1,opt,name=Term,proto3" json:"Term,omitempty"`
-	LeaderId          string                 `protobuf:"bytes,2,opt,name=leaderId,proto3" json:"leaderId,omitempty"`
+	LeaderId          int64                  `protobuf:"varint,2,opt,name=leaderId,proto3" json:"leaderId,omitempty"`
 	LastIncludedIndex int64                  `protobuf:"varint,3,opt,name=LastIncludedIndex,proto3" json:"LastIncludedIndex,omitempty"`
 	LastIncludedTerm  int64                  `protobuf:"varint,4,opt,name=LastIncludedTerm,proto3" json:"LastIncludedTerm,omitempty"`
 	Data              []byte                 `protobuf:"bytes,5,opt,name=Data,proto3" json:"Data,omitempty"`
@@ -453,11 +453,11 @@ func (x *InstallSnapshotArgs) GetTerm() int64 {
 	return 0
 }
 
-func (x *InstallSnapshotArgs) GetLeaderId() string {
+func (x *InstallSnapshotArgs) GetLeaderId() int64 {
 	if x != nil {
 		return x.LeaderId
 	}
-	return ""
+	return 0
 }
 
 func (x *InstallSnapshotArgs) GetLastIncludedIndex() int64 {
@@ -757,7 +757,7 @@ const file_raft_proto_rawDesc = "" +
 	"\fConflictTerm\x18\x04 \x01(\x03R\fConflictTerm\"\xb3\x01\n" +
 	"\x13InstallSnapshotArgs\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x03R\x04Term\x12\x1a\n" +
-	"\bleaderId\x18\x02 \x01(\tR\bleaderId\x12,\n" +
+	"\bleaderId\x18\x02 \x01(\x03R\bleaderId\x12,\n" +
 	"\x11LastIncludedIndex\x18\x03 \x01(\x03R\x11LastIncludedIndex\x12*\n" +
 	"\x10LastIncludedTerm\x18\x04 \x01(\x03R\x10LastIncludedTerm\x12\x12\n" +
 	"\x04Data\x18\x05 \x01(\fR\x04Data\"*\n" +
