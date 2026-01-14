@@ -8,19 +8,16 @@ enum Error {
 
     OK = 1;
     ERR_NO_KEY = 2;
-    ERR_VERSION = 3;
-
-    ERR_MAYBE = 4;
-    ERR_WRONG_LEADER = 5;
-    ERR_WRONG_GROUP = 6;
+    ERR_WRONG_LEADER = 3;
+    ERR_TIMEOUT = 4;
 }
 
 message PutAppendArgs {
     string key = 1;
     string value = 2;
-    string Op = 3;
+    string op = 3;
     int64 clientId = 4;
-    int64 requestId = 5;
+    int64 seqId = 5;
 }
 
 message PutAppendReply {
@@ -29,14 +26,22 @@ message PutAppendReply {
 message GetArgs {
     string key = 1;
     int64 clientId = 2;
-    int64 requestId = 3;
+    int64 seqId = 3;
 }
 
 message GetReply {
     string value = 1;
-    uint64 version = 2;
-    Error err = 3;
+    Error err = 2;
 }
+
+message Op {
+    string Operation = 1;  // "Get", "Put", "Append"
+    string Key = 2;
+    string Value = 3;
+    int64 ClientId = 4;
+    int64 SeqId = 5;
+}
+
 message KVSnapshot {
     map<string, string> Data = 1;
     map<int64, int64> LastOperations = 2;

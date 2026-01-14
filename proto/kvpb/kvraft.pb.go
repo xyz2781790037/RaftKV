@@ -27,10 +27,8 @@ const (
 	Error_ERR_UNKNOWN      Error = 0
 	Error_OK               Error = 1
 	Error_ERR_NO_KEY       Error = 2
-	Error_ERR_VERSION      Error = 3
-	Error_ERR_MAYBE        Error = 4
-	Error_ERR_WRONG_LEADER Error = 5
-	Error_ERR_WRONG_GROUP  Error = 6
+	Error_ERR_WRONG_LEADER Error = 3
+	Error_ERR_TIMEOUT      Error = 4
 )
 
 // Enum value maps for Error.
@@ -39,19 +37,15 @@ var (
 		0: "ERR_UNKNOWN",
 		1: "OK",
 		2: "ERR_NO_KEY",
-		3: "ERR_VERSION",
-		4: "ERR_MAYBE",
-		5: "ERR_WRONG_LEADER",
-		6: "ERR_WRONG_GROUP",
+		3: "ERR_WRONG_LEADER",
+		4: "ERR_TIMEOUT",
 	}
 	Error_value = map[string]int32{
 		"ERR_UNKNOWN":      0,
 		"OK":               1,
 		"ERR_NO_KEY":       2,
-		"ERR_VERSION":      3,
-		"ERR_MAYBE":        4,
-		"ERR_WRONG_LEADER": 5,
-		"ERR_WRONG_GROUP":  6,
+		"ERR_WRONG_LEADER": 3,
+		"ERR_TIMEOUT":      4,
 	}
 )
 
@@ -86,9 +80,9 @@ type PutAppendArgs struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	Op            string                 `protobuf:"bytes,3,opt,name=Op,proto3" json:"Op,omitempty"`
+	Op            string                 `protobuf:"bytes,3,opt,name=op,proto3" json:"op,omitempty"`
 	ClientId      int64                  `protobuf:"varint,4,opt,name=clientId,proto3" json:"clientId,omitempty"`
-	RequestId     int64                  `protobuf:"varint,5,opt,name=requestId,proto3" json:"requestId,omitempty"`
+	SeqId         int64                  `protobuf:"varint,5,opt,name=seqId,proto3" json:"seqId,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -151,9 +145,9 @@ func (x *PutAppendArgs) GetClientId() int64 {
 	return 0
 }
 
-func (x *PutAppendArgs) GetRequestId() int64 {
+func (x *PutAppendArgs) GetSeqId() int64 {
 	if x != nil {
-		return x.RequestId
+		return x.SeqId
 	}
 	return 0
 }
@@ -206,7 +200,7 @@ type GetArgs struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	ClientId      int64                  `protobuf:"varint,2,opt,name=clientId,proto3" json:"clientId,omitempty"`
-	RequestId     int64                  `protobuf:"varint,3,opt,name=requestId,proto3" json:"requestId,omitempty"`
+	SeqId         int64                  `protobuf:"varint,3,opt,name=seqId,proto3" json:"seqId,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -255,9 +249,9 @@ func (x *GetArgs) GetClientId() int64 {
 	return 0
 }
 
-func (x *GetArgs) GetRequestId() int64 {
+func (x *GetArgs) GetSeqId() int64 {
 	if x != nil {
-		return x.RequestId
+		return x.SeqId
 	}
 	return 0
 }
@@ -265,8 +259,7 @@ func (x *GetArgs) GetRequestId() int64 {
 type GetReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Value         string                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
-	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
-	Err           Error                  `protobuf:"varint,3,opt,name=err,proto3,enum=kvraft.Error" json:"err,omitempty"`
+	Err           Error                  `protobuf:"varint,2,opt,name=err,proto3,enum=kvraft.Error" json:"err,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -308,18 +301,87 @@ func (x *GetReply) GetValue() string {
 	return ""
 }
 
-func (x *GetReply) GetVersion() uint64 {
-	if x != nil {
-		return x.Version
-	}
-	return 0
-}
-
 func (x *GetReply) GetErr() Error {
 	if x != nil {
 		return x.Err
 	}
 	return Error_ERR_UNKNOWN
+}
+
+type Op struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Operation     string                 `protobuf:"bytes,1,opt,name=Operation,proto3" json:"Operation,omitempty"` // "Get", "Put", "Append"
+	Key           string                 `protobuf:"bytes,2,opt,name=Key,proto3" json:"Key,omitempty"`
+	Value         string                 `protobuf:"bytes,3,opt,name=Value,proto3" json:"Value,omitempty"`
+	ClientId      int64                  `protobuf:"varint,4,opt,name=ClientId,proto3" json:"ClientId,omitempty"`
+	SeqId         int64                  `protobuf:"varint,5,opt,name=SeqId,proto3" json:"SeqId,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Op) Reset() {
+	*x = Op{}
+	mi := &file_kvraft_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Op) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Op) ProtoMessage() {}
+
+func (x *Op) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Op.ProtoReflect.Descriptor instead.
+func (*Op) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Op) GetOperation() string {
+	if x != nil {
+		return x.Operation
+	}
+	return ""
+}
+
+func (x *Op) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *Op) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *Op) GetClientId() int64 {
+	if x != nil {
+		return x.ClientId
+	}
+	return 0
+}
+
+func (x *Op) GetSeqId() int64 {
+	if x != nil {
+		return x.SeqId
+	}
+	return 0
 }
 
 type KVSnapshot struct {
@@ -332,7 +394,7 @@ type KVSnapshot struct {
 
 func (x *KVSnapshot) Reset() {
 	*x = KVSnapshot{}
-	mi := &file_kvraft_proto_msgTypes[4]
+	mi := &file_kvraft_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +406,7 @@ func (x *KVSnapshot) String() string {
 func (*KVSnapshot) ProtoMessage() {}
 
 func (x *KVSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_kvraft_proto_msgTypes[4]
+	mi := &file_kvraft_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +419,7 @@ func (x *KVSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KVSnapshot.ProtoReflect.Descriptor instead.
 func (*KVSnapshot) Descriptor() ([]byte, []int) {
-	return file_kvraft_proto_rawDescGZIP(), []int{4}
+	return file_kvraft_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *KVSnapshot) GetData() map[string]string {
@@ -378,23 +440,28 @@ var File_kvraft_proto protoreflect.FileDescriptor
 
 const file_kvraft_proto_rawDesc = "" +
 	"\n" +
-	"\fkvraft.proto\x12\x06kvraft\"\x81\x01\n" +
+	"\fkvraft.proto\x12\x06kvraft\"y\n" +
 	"\rPutAppendArgs\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x0e\n" +
-	"\x02Op\x18\x03 \x01(\tR\x02Op\x12\x1a\n" +
-	"\bclientId\x18\x04 \x01(\x03R\bclientId\x12\x1c\n" +
-	"\trequestId\x18\x05 \x01(\x03R\trequestId\"1\n" +
+	"\x02op\x18\x03 \x01(\tR\x02op\x12\x1a\n" +
+	"\bclientId\x18\x04 \x01(\x03R\bclientId\x12\x14\n" +
+	"\x05seqId\x18\x05 \x01(\x03R\x05seqId\"1\n" +
 	"\x0ePutAppendReply\x12\x1f\n" +
-	"\x03err\x18\x01 \x01(\x0e2\r.kvraft.ErrorR\x03err\"U\n" +
+	"\x03err\x18\x01 \x01(\x0e2\r.kvraft.ErrorR\x03err\"M\n" +
 	"\aGetArgs\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1a\n" +
-	"\bclientId\x18\x02 \x01(\x03R\bclientId\x12\x1c\n" +
-	"\trequestId\x18\x03 \x01(\x03R\trequestId\"[\n" +
+	"\bclientId\x18\x02 \x01(\x03R\bclientId\x12\x14\n" +
+	"\x05seqId\x18\x03 \x01(\x03R\x05seqId\"A\n" +
 	"\bGetReply\x12\x14\n" +
-	"\x05value\x18\x01 \x01(\tR\x05value\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x1f\n" +
-	"\x03err\x18\x03 \x01(\x0e2\r.kvraft.ErrorR\x03err\"\x8a\x02\n" +
+	"\x05value\x18\x01 \x01(\tR\x05value\x12\x1f\n" +
+	"\x03err\x18\x02 \x01(\x0e2\r.kvraft.ErrorR\x03err\"|\n" +
+	"\x02Op\x12\x1c\n" +
+	"\tOperation\x18\x01 \x01(\tR\tOperation\x12\x10\n" +
+	"\x03Key\x18\x02 \x01(\tR\x03Key\x12\x14\n" +
+	"\x05Value\x18\x03 \x01(\tR\x05Value\x12\x1a\n" +
+	"\bClientId\x18\x04 \x01(\x03R\bClientId\x12\x14\n" +
+	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId\"\x8a\x02\n" +
 	"\n" +
 	"KVSnapshot\x120\n" +
 	"\x04Data\x18\x01 \x03(\v2\x1c.kvraft.KVSnapshot.DataEntryR\x04Data\x12N\n" +
@@ -404,16 +471,14 @@ const file_kvraft_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aA\n" +
 	"\x13LastOperationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x03R\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01*{\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01*W\n" +
 	"\x05Error\x12\x0f\n" +
 	"\vERR_UNKNOWN\x10\x00\x12\x06\n" +
 	"\x02OK\x10\x01\x12\x0e\n" +
 	"\n" +
-	"ERR_NO_KEY\x10\x02\x12\x0f\n" +
-	"\vERR_VERSION\x10\x03\x12\r\n" +
-	"\tERR_MAYBE\x10\x04\x12\x14\n" +
-	"\x10ERR_WRONG_LEADER\x10\x05\x12\x13\n" +
-	"\x0fERR_WRONG_GROUP\x10\x062n\n" +
+	"ERR_NO_KEY\x10\x02\x12\x14\n" +
+	"\x10ERR_WRONG_LEADER\x10\x03\x12\x0f\n" +
+	"\vERR_TIMEOUT\x10\x042n\n" +
 	"\x06RaftKV\x12(\n" +
 	"\x03Get\x12\x0f.kvraft.GetArgs\x1a\x10.kvraft.GetReply\x12:\n" +
 	"\tPutAppend\x12\x15.kvraft.PutAppendArgs\x1a\x16.kvraft.PutAppendReplyB\bZ\x06./kvpbb\x06proto3"
@@ -431,22 +496,23 @@ func file_kvraft_proto_rawDescGZIP() []byte {
 }
 
 var file_kvraft_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kvraft_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_kvraft_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_kvraft_proto_goTypes = []any{
 	(Error)(0),             // 0: kvraft.Error
 	(*PutAppendArgs)(nil),  // 1: kvraft.PutAppendArgs
 	(*PutAppendReply)(nil), // 2: kvraft.PutAppendReply
 	(*GetArgs)(nil),        // 3: kvraft.GetArgs
 	(*GetReply)(nil),       // 4: kvraft.GetReply
-	(*KVSnapshot)(nil),     // 5: kvraft.KVSnapshot
-	nil,                    // 6: kvraft.KVSnapshot.DataEntry
-	nil,                    // 7: kvraft.KVSnapshot.LastOperationsEntry
+	(*Op)(nil),             // 5: kvraft.Op
+	(*KVSnapshot)(nil),     // 6: kvraft.KVSnapshot
+	nil,                    // 7: kvraft.KVSnapshot.DataEntry
+	nil,                    // 8: kvraft.KVSnapshot.LastOperationsEntry
 }
 var file_kvraft_proto_depIdxs = []int32{
 	0, // 0: kvraft.PutAppendReply.err:type_name -> kvraft.Error
 	0, // 1: kvraft.GetReply.err:type_name -> kvraft.Error
-	6, // 2: kvraft.KVSnapshot.Data:type_name -> kvraft.KVSnapshot.DataEntry
-	7, // 3: kvraft.KVSnapshot.LastOperations:type_name -> kvraft.KVSnapshot.LastOperationsEntry
+	7, // 2: kvraft.KVSnapshot.Data:type_name -> kvraft.KVSnapshot.DataEntry
+	8, // 3: kvraft.KVSnapshot.LastOperations:type_name -> kvraft.KVSnapshot.LastOperationsEntry
 	3, // 4: kvraft.RaftKV.Get:input_type -> kvraft.GetArgs
 	1, // 5: kvraft.RaftKV.PutAppend:input_type -> kvraft.PutAppendArgs
 	4, // 6: kvraft.RaftKV.Get:output_type -> kvraft.GetReply
@@ -469,7 +535,7 @@ func file_kvraft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kvraft_proto_rawDesc), len(file_kvraft_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
