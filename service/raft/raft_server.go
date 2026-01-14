@@ -2,6 +2,7 @@ package raft
 
 import (
 	pb "RaftKV/proto/raftpb"
+	"RaftKV/service/raftapi"
 	"context"
 )
  
@@ -145,14 +146,63 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 
 func (rf *Raft) InstallSnapshot(ctx context.Context, args *pb.InstallSnapshotArgs) (*pb.InstallSnapshotReply, error) {
     rf.mu.Lock()
-    defer rf.mu.Unlock()
     
-    reply := &pb.InstallSnapshotReply{}
-    
-    if rf.killed() {
+	reply := &pb.InstallSnapshotReply{}
+	if rf.killed() {
+		rf.mu.Unlock()
         return reply, nil
     }
+	if args.Term < rf.currentTerm{
+		reply.Term = rf.currentTerm
+		rf.mu.Unlock()
+		return reply,nil
+	}
+    if args.Term > rf.currentTerm{
+		rf.currentTerm = args.Term
+		rf.becomeFollower(args.Term)
+	}
+	rf.resetElectionTimer()
+	if args.LastIncludedIndex <= rf.lastIncludedIndex{
+		rf.mu.Unlock()
+		return reply,nil
+	}
+    indexDiff := args.LastIncludedIndex - rf.lastIncludedIndex
+    sliceIndex := indexDiff - 1
+    hasMatchingEntry := false
+	if sliceIndex < Len(rf.log) && sliceIndex >= 0{
+		if rf.log[sliceIndex].Term == args.LastIncludedTerm{
+			hasMatchingEntry = true
+		}
+	}
+	if hasMatchingEntry{
+		newLog := make([]*pb.LogEntry,len(rf.log[sliceIndex + 1:]))
+		copy(newLog,rf.log[sliceIndex + 1:])
+		rf.log = newLog
+	}else{
+		rf.log = make([]*pb.LogEntry, 0)
+	}
+    rf.lastIncludedIndex = args.LastIncludedIndex
+    rf.lastIncludedTerm = args.LastIncludedTerm
+	if args.LastIncludedIndex > rf.commitIndex {
+        rf.commitIndex = args.LastIncludedIndex
+    }
+    if args.LastIncludedIndex > rf.lastApplied {
+        rf.lastApplied = args.LastIncludedIndex
+    }
+
+	rf.store.Log.SaveSnapshot(rf.lastIncludedTerm, rf.lastIncludedIndex, args.Data)
+    rf.store.Log.SaveLogs(rf.log)
+    rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
+
+    snapshotMsg := raftapi.ApplyMsg{
+        CommandValid:  false,
+        SnapshotValid: true,
+        Snapshot:      args.Data,
+        SnapshotTerm:  args.LastIncludedTerm,
+        SnapshotIndex: args.LastIncludedIndex,
+    }
+    rf.mu.Unlock()
     
-    
+    rf.applyCh <- snapshotMsg
     return reply, nil
 }

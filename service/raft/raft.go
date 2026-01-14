@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"google.golang.org/protobuf/proto"
 )
 
 type PeerState int64
@@ -24,10 +25,10 @@ const (
 type Raft struct {
 	mu          sync.Mutex        // Lock to protect shared access to this peer's state
 	peers       []*RaftPeer       // RPC end point64s of all peers
-	logStore    *storage.LogStore // Object to hold this peer's persisted state
-	stateStore  *storage.StateStore
+	store    *storage.Store // Object to hold this peer's persisted state
 	me          int64 // this peer's index int64o peers[]
 	dead        int32 // set by Kill()
+	pb.UnimplementedRaftServer
 	currentTerm int64
 	votedFor    int64
 	votes       int32
@@ -82,12 +83,20 @@ func (rf *Raft) GetState() (int64, bool) {
 	isLeader := rf.state == Leader
 	return term, isLeader
 }
+func (rf *Raft) GetRaftStateSize() int64 {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+    
+    // 你需要调用存储层的接口来获取当前字节数
+    // 如果你的 store 封装了 persister，通常是 store.RaftStateSize()
+    return rf.store.RaftStateSize()
+}
 func (rf *Raft) persist() {
-	rf.stateStore.SaveState(rf.currentTerm, rf.votedFor)
-	rf.logStore.SaveLogs(rf.log)
+	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
+	rf.store.Log.SaveLogs(rf.log)
 }
 func (rf *Raft) readPersist(data []byte) {
-	term, votedFor, okState := rf.stateStore.LoadState()
+	term, votedFor, okState := rf.store.State.LoadState()
 	if okState {
 		rf.currentTerm = term
 		rf.votedFor = votedFor
@@ -97,7 +106,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.votedFor = -1
 	}
 
-	snapMeta, _, okSnap := rf.logStore.LoadSnapshot()
+	snapMeta, _, okSnap := rf.store.Log.LoadSnapshot()
 	if okSnap && snapMeta != nil {
         rf.lastIncludedIndex = snapMeta.LastIncludedIndex
         rf.lastIncludedTerm = snapMeta.LastIncludedTerm
@@ -107,7 +116,7 @@ func (rf *Raft) readPersist(data []byte) {
         rf.lastIncludedIndex = 0
         rf.lastIncludedTerm = 0
     }
-	logs, okLog := rf.logStore.LoadLogs()
+	logs, okLog := rf.store.Log.LoadLogs()
     if okLog {
         rf.log = logs
     } else {
@@ -126,10 +135,42 @@ func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 		return
 	}
 	sliceIndex := index - rf.lastIncludedIndex
-	var lastIncludedTerm
+	var lastIncludedTerm int64
+	if sliceIndex > 0 && sliceIndex <= Len(rf.log){
+		lastIncludedTerm = rf.log[sliceIndex].Term
+	}else{
+		if index > rf.getLastLogIndex(){
+			return
+		}
+		lastIncludedTerm = rf.lastIncludedTerm
+	}
+
+	if sliceIndex < Len(rf.log){
+		newLog := make([]*pb.LogEntry,len(rf.log[sliceIndex:]))
+		copy(newLog,rf.log[sliceIndex:])
+		rf.log = newLog
+	}else{
+		rf.log = make([]*pb.LogEntry, 0)
+	}
+	rf.lastIncludedIndex = index
+	rf.lastIncludedTerm = lastIncludedTerm
+
+	if index > rf.commitIndex{
+		rf.commitIndex = index
+	}
+	if index > rf.lastApplied{
+		rf.lastApplied = index
+	}
+	rf.store.Log.SaveSnapshot(rf.lastIncludedTerm,rf.lastIncludedIndex,snapshot)
+	rf.store.Log.SaveLogs(rf.log)
+	rf.store.State.SaveState(rf.currentTerm,rf.votedFor)
+	if rf.state == Leader {
+		rf.sendHeartbeatAtOnce()
+	}
+	rf.applyCond.Signal()
 }
 
-func (rf *Raft) Propose(command []byte) (int64, int64, bool) {
+func (rf *Raft) Propose(command proto.Message) (int64, int64, bool) {
 	var index int64 = -1
 	var term int64 = -1
 	rf.mu.Lock()
@@ -137,11 +178,16 @@ func (rf *Raft) Propose(command []byte) (int64, int64, bool) {
 	if rf.state != Leader || rf.killed() {
 		return index, term, false
 	}
+	cmdBytes, err := proto.Marshal(command)
+	if err != nil {
+		tool.Log.Error("Propose marshal error", "err", err)
+		return -1, -1, false
+	}
 	index = rf.getLastLogIndex() + 1
 	term = rf.currentTerm
 	rf.log = append(rf.log, &pb.LogEntry{
 		Term:    term,
-		Command: command,
+		Command: cmdBytes,
 	})
 	rf.persist()
 	// 立马发送心跳
@@ -254,12 +300,10 @@ func (rf *Raft) sendHeartbeatAtOnce() {
 }
 
 func Make(peers []*RaftPeer, me int64,
-	stateStore *storage.StateStore,
-	logStore *storage.LogStore, applyCh chan raftapi.ApplyMsg) raftapi.Raft {
+	state *storage.Store, applyCh chan raftapi.ApplyMsg) raftapi.Raft {
 	rf := &Raft{}
 	rf.peers = peers
-	rf.stateStore = stateStore
-	rf.logStore = logStore
+	rf.store = state
 	rf.me = me
 	rf.mu = sync.Mutex{}
 	atomic.StoreInt32(&rf.dead, 0)
@@ -289,7 +333,7 @@ func (rf *Raft) applier() {
 			return
 		}
 		if rf.lastApplied < rf.lastIncludedIndex {
-			_, snapshotData, ok := rf.logStore.LoadSnapshot()
+			_, snapshotData, ok := rf.store.Log.LoadSnapshot()
 			if !ok {
 				tool.Log.Error("Failed to load snapshot in applier")
 				snapshotData = nil

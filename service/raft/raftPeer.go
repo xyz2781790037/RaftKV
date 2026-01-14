@@ -100,7 +100,7 @@ func (rp *RaftPeer) CallInstallSnapshot(in *pb.InstallSnapshotArgs)(*pb.InstallS
 		tool.Log.Error("stub in peer is nil")
 		return nil,false
 	}
-	ctx,cancel := context.WithTimeout(context.Background(),rpcTimeout)
+	ctx,cancel := context.WithTimeout(context.Background(),5 *time.Second)
 	defer cancel()
 
 	reply,err := stub.InstallSnapshot(ctx,in)

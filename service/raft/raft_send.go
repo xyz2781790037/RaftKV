@@ -2,14 +2,12 @@ package raft
 
 import (
 	pb "RaftKV/proto/raftpb"
+	"RaftKV/tool"
 	"sort"
 )
 
 const MaxLogEntriesPerRPC = 500
 
-func (rf *Raft) sendInstallSnapshot(server int, peer *RaftPeer) {
-
-}
 func (rf *Raft) sendRequestVote() {
 	rf.mu.Lock()
 	if rf.killed() || rf.state == Leader {
@@ -113,20 +111,20 @@ func (rf *Raft) sendAppendEntries() {
 				rf.matchIndex[i] = prevLogIndex + Len(args.Entries)
 				rf.nextIndex[i] = rf.matchIndex[i] + 1
 				rf.updateCommitIndex()
-			}else{
-				if reply.ConflictTerm == -1{
+			} else {
+				if reply.ConflictTerm == -1 {
 					rf.nextIndex[i] = reply.ConflictIndex
-				} else{
+				} else {
 					var conflictIndex int64 = -1
-					for i := rf.getLastLogIndex();i >= rf.lastIncludedIndex;i--{
-						if rf.getLogTerm(i) == reply.ConflictTerm{
+					for i := rf.getLastLogIndex(); i >= rf.lastIncludedIndex; i-- {
+						if rf.getLogTerm(i) == reply.ConflictTerm {
 							conflictIndex = i
 							break
 						}
 					}
-					if conflictIndex != -1{
+					if conflictIndex != -1 {
 						rf.nextIndex[i] = conflictIndex + 1
-					}else{
+					} else {
 						rf.nextIndex[i] = reply.ConflictIndex
 					}
 				}
@@ -135,51 +133,92 @@ func (rf *Raft) sendAppendEntries() {
 	}
 
 }
+func (rf *Raft) sendInstallSnapshot(server int, peer *RaftPeer) {
+	snapMeta, snapshotData, ok := rf.store.Log.LoadSnapshot()
+	if !ok {
+		tool.Log.Error("Failed to load snapshot in applier")
+		snapshotData = nil
+	}
+	rf.mu.Lock()
+	if rf.killed() || rf.state != Leader {
+		rf.mu.Unlock()
+		return
+	}
+
+	args := pb.InstallSnapshotArgs{
+		Term:              rf.currentTerm,
+		LeaderId:          rf.me,
+		LastIncludedIndex: snapMeta.LastIncludedIndex,
+		LastIncludedTerm:  snapMeta.LastIncludedTerm,
+		Data:              snapshotData,
+	}
+	rf.mu.Unlock()
+
+	reply, ok := peer.CallInstallSnapshot(&args)
+	if !ok {
+		return
+	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.killed() || rf.currentTerm != args.Term || rf.state != Leader {
+		return
+	}
+	if reply.Term > rf.currentTerm {
+		rf.becomeFollower(reply.Term)
+		rf.persist()
+		return
+	}
+	if args.LastIncludedIndex > rf.matchIndex[server] {
+		rf.nextIndex[server] = args.LastIncludedIndex + 1
+		rf.matchIndex[server] = args.LastIncludedIndex
+	}
+
+}
 
 func (rf *Raft) updateCommitIndex() {
-    // 假设 rf.matchIndex 已经是 []int64 类型了
-    // 假设 rf.commitIndex, rf.getLastLogIndex() 都是 int64
+	// 假设 rf.matchIndex 已经是 []int64 类型了
+	// 假设 rf.commitIndex, rf.getLastLogIndex() 都是 int64
 
-    // 1. 收集所有节点的 matchIndex (用 int64 切片)
-    // 这里要注意：make 的长度是 int，但里面的内容是 int64
-    matchIndexes := make([]int64, len(rf.peers))
-    
-    for i := range rf.peers {
-        if i == int(rf.me) {
-            // Leader 自己的进度就是最新的日志索引
-            matchIndexes[i] = rf.getLastLogIndex()
-        } else {
-            matchIndexes[i] = rf.matchIndex[i]
-        }
-    }
+	// 1. 收集所有节点的 matchIndex (用 int64 切片)
+	// 这里要注意：make 的长度是 int，但里面的内容是 int64
+	matchIndexes := make([]int64, len(rf.peers))
 
-    // 2. 排序 (关键修改！)
-    // sort.Ints 不能排 int64，必须用 sort.Slice 自定义比较函数
-    sort.Slice(matchIndexes, func(i, j int) bool {
-        return matchIndexes[i] < matchIndexes[j]
-    })
+	for i := range rf.peers {
+		if i == int(rf.me) {
+			// Leader 自己的进度就是最新的日志索引
+			matchIndexes[i] = rf.getLastLogIndex()
+		} else {
+			matchIndexes[i] = rf.matchIndex[i]
+		}
+	}
 
-    // 3. 取中位数
-    // 比如 3 个节点，len/2 = 1，取排序后第 2 个
-    // 比如 5 个节点，len/2 = 2，取排序后第 3 个
-    // 这个位置的值，保证了至少有 (N/2 + 1) 个节点达到了这个值
-    newCommitIndex := matchIndexes[len(rf.peers)/2]
+	// 2. 排序 (关键修改！)
+	// sort.Ints 不能排 int64，必须用 sort.Slice 自定义比较函数
+	sort.Slice(matchIndexes, func(i, j int) bool {
+		return matchIndexes[i] < matchIndexes[j]
+	})
 
-    // 4. 检查 Term (Raft 论文 Figure 8 的限制)
-    // 只有当前 Term 的日志被复制过半，才能提交
-    // 注意：所有比较都要用 int64
-    if newCommitIndex > rf.commitIndex {
-        // rf.getLogTerm 接收 int64，rf.currentTerm 是 int64
-        if rf.getLogTerm(newCommitIndex) == rf.currentTerm {
-            rf.commitIndex = newCommitIndex
-            
-            // 唤醒 Apply 协程，去把日志应用到状态机
-            rf.applyCond.Signal() 
-            
-            // 调试日志（可选）
-            // DPrintf("Leader %d updated commitIndex to %d", rf.me, rf.commitIndex)
-        }
-    }
+	// 3. 取中位数
+	// 比如 3 个节点，len/2 = 1，取排序后第 2 个
+	// 比如 5 个节点，len/2 = 2，取排序后第 3 个
+	// 这个位置的值，保证了至少有 (N/2 + 1) 个节点达到了这个值
+	newCommitIndex := matchIndexes[len(rf.peers)/2]
+
+	// 4. 检查 Term (Raft 论文 Figure 8 的限制)
+	// 只有当前 Term 的日志被复制过半，才能提交
+	// 注意：所有比较都要用 int64
+	if newCommitIndex > rf.commitIndex {
+		// rf.getLogTerm 接收 int64，rf.currentTerm 是 int64
+		if rf.getLogTerm(newCommitIndex) == rf.currentTerm {
+			rf.commitIndex = newCommitIndex
+
+			// 唤醒 Apply 协程，去把日志应用到状态机
+			rf.applyCond.Signal()
+
+			// 调试日志（可选）
+			// DPrintf("Leader %d updated commitIndex to %d", rf.me, rf.commitIndex)
+		}
+	}
 }
 func (rf *Raft) getEntriesToSend(nextIndex int64) []*pb.LogEntry {
 	lastLogIndex := rf.getLastLogIndex()
