@@ -1,11 +1,14 @@
 package raftapi
 
+import (
+	"google.golang.org/protobuf/proto"
+)
+
 type Raft interface {
-	Propose(command interface{}) (int64, int64, bool)
+	Propose(command proto.Message) (int64, int64, bool)
 
 	GetState() (int64, bool)
-
-	// For Snaphots (3D)
+	GetRaftStateSize() (int64)
 	Snapshot(index int64, snapshot []byte)
 
 	Shutdown()
@@ -13,10 +16,10 @@ type Raft interface {
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
-	CommandIndex int
+	CommandIndex int64
 
 	SnapshotValid bool
 	Snapshot      []byte
-	SnapshotTerm  int
-	SnapshotIndex int
+	SnapshotTerm  int64
+	SnapshotIndex int64
 }

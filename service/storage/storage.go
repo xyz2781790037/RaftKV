@@ -10,12 +10,22 @@ import (
 	pb "RaftKV/proto/raftpb"
 	"google.golang.org/protobuf/proto"
 )
-
+type Store struct {
+	State *StateStore
+	Log *LogStore
+}
 type StateStore struct {
 	mu       sync.Mutex
 	filePath string
 }
-
+func NewStore(dataDir string, nodeID int64) *Store{
+	s := NewStateStore(dataDir,nodeID)
+	l := NewLogStore(dataDir,nodeID)
+	return &Store{
+		State: s,
+		Log: l,
+	}
+}
 func NewStateStore(dataDir string, nodeID int64) *StateStore {
 	filePath := filepath.Join(dataDir, "raftNode_"+strconv.Itoa(int(nodeID))+".dat")
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
@@ -161,4 +171,14 @@ func (l *LogStore) LoadSnapshot() (*pb.SnapshotState, []byte, bool) {
 		return nil, nil, false
 	}
 	return sl.Metadata, sl.Data, true
+}
+func (s *Store) RaftStateSize() int64 {
+    var totalSize int64 = 0
+    if info, err := os.Stat(s.State.filePath); err == nil {
+        totalSize += info.Size()
+    }
+    if info, err := os.Stat(s.Log.filePath); err == nil {
+        totalSize += info.Size()
+    }
+    return totalSize
 }
