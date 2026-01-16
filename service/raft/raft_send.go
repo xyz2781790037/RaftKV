@@ -3,6 +3,7 @@ package raft
 import (
 	pb "RaftKV/proto/raftpb"
 	"RaftKV/tool"
+	"fmt"
 	"sort"
 )
 
@@ -19,6 +20,8 @@ func (rf *Raft) sendRequestVote() {
 	args := pb.RequestVoteArgs{
 		Term:        rf.currentTerm,
 		CandidateId: rf.me,
+		LastLogIndex: rf.getLastLogIndex(),
+		LastLogTerm: rf.getLastLogTerm(),
 	}
 	rf.mu.Unlock()
 	for i, peer := range rf.peers {
@@ -85,6 +88,7 @@ func (rf *Raft) sendAppendEntries() {
 			if nextIndex <= rf.getLastLogIndex() {
 				entries = rf.getEntriesToSend(nextIndex)
 			}
+			rf.mu.Unlock()
 			args := pb.AppendEntriesArgs{
 				Term:         currentTerm,
 				LeaderId:     leaderID,
@@ -108,7 +112,7 @@ func (rf *Raft) sendAppendEntries() {
 				return
 			}
 			if reply.Success {
-				rf.matchIndex[i] = prevLogIndex + Len(args.Entries)
+				rf.matchIndex[i] = prevLogIndex + int64(len(args.Entries))
 				rf.nextIndex[i] = rf.matchIndex[i] + 1
 				rf.updateCommitIndex()
 			} else {
@@ -221,28 +225,43 @@ func (rf *Raft) updateCommitIndex() {
 	}
 }
 func (rf *Raft) getEntriesToSend(nextIndex int64) []*pb.LogEntry {
-	lastLogIndex := rf.getLastLogIndex()
-	if nextIndex > lastLogIndex {
-		return nil
-	}
-	endIndex := lastLogIndex + 1
-	if endIndex > nextIndex+MaxLogEntriesPerRPC {
-		endIndex = nextIndex + MaxLogEntriesPerRPC
-	}
-	sliceStart := nextIndex - rf.lastIncludedIndex
-	sliceEnd := endIndex - rf.lastIncludedIndex
-	if sliceStart < 0 {
-		sliceStart = 0
-	}
-	if sliceEnd > Len(rf.log) {
-		sliceEnd = Len(rf.log)
-	}
-	if sliceStart >= sliceEnd {
-		return nil
-	}
-	entries := make([]*pb.LogEntry, sliceEnd-sliceStart)
-	copy(entries, rf.log[sliceStart:sliceEnd])
-	return entries
+    lastLogIndex := rf.getLastLogIndex()
+    
+    // 如果需要的日志比我有的还新，或者需要发快照，直接返回 nil
+    if nextIndex > lastLogIndex {
+        return nil
+    }
+
+    // 真正的切片起始下标 (因为 log[0] 对应 lastIncludedIndex)
+    // 假设 lastIncludedIndex=0, log=[dummy, A, B]. nextIndex=1. 
+    // realIndex = 1 - 0 = 1. 取 log[1] (A). 正确。
+    realIndex := nextIndex - rf.lastIncludedIndex
+    
+    // 防御：如果计算出的下标不合法
+    if realIndex < 0 || realIndex >= int64(len(rf.log)) {
+        return nil
+    }
+
+    // 限制单次发送数量 (防止包过大)
+    endIndex := lastLogIndex + 1
+    if endIndex > nextIndex+MaxLogEntriesPerRPC {
+        endIndex = nextIndex + MaxLogEntriesPerRPC
+    }
+    
+    realEnd := endIndex - rf.lastIncludedIndex
+    if realEnd > int64(len(rf.log)) {
+        realEnd = int64(len(rf.log))
+    }
+
+    //再次防御
+    if realIndex >= realEnd {
+        return nil
+    }
+
+    // 深度拷贝，防止并发问题
+    entries := make([]*pb.LogEntry, realEnd-realIndex)
+    copy(entries, rf.log[realIndex:realEnd])
+    return entries
 }
 func (rf *Raft) becomeCandidate() {
 	rf.state = Candidate
@@ -256,6 +275,9 @@ func (rf *Raft) becomeFollower(term int64) {
 	rf.currentTerm = term
 }
 func (rf *Raft) becomeLeader() {
+	if rf.state == Leader {
+        return
+    }
 	rf.state = Leader
 	lastLogIndex := rf.getLastLogIndex()
 	for i := range rf.peers {
@@ -265,4 +287,5 @@ func (rf *Raft) becomeLeader() {
 		rf.nextIndex[i] = lastLogIndex + 1
 		rf.matchIndex[i] = 0
 	}
+	fmt.Println("\033[1;36m",rf.me,"become new Leader","Term=",rf.currentTerm,"\033[0m")
 }

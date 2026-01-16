@@ -7,10 +7,10 @@ import (
 	"RaftKV/service/storage"
 	"RaftKV/tool"
 	"math/rand"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
 	"google.golang.org/protobuf/proto"
 )
 
@@ -23,11 +23,11 @@ const (
 )
 
 type Raft struct {
-	mu          sync.Mutex        // Lock to protect shared access to this peer's state
-	peers       []*RaftPeer       // RPC end point64s of all peers
-	store    *storage.Store // Object to hold this peer's persisted state
-	me          int64 // this peer's index int64o peers[]
-	dead        int32 // set by Kill()
+	mu    sync.Mutex     // Lock to protect shared access to this peer's state
+	peers []*RaftPeer    // RPC end point64s of all peers
+	store *storage.Store // Object to hold this peer's persisted state
+	me    int64          // this peer's index int64o peers[]
+	dead  int32          // set by Kill()
 	pb.UnimplementedRaftServer
 	currentTerm int64
 	votedFor    int64
@@ -59,22 +59,22 @@ func (rf *Raft) getLogTerm(index int64) int64 {
 		return rf.lastIncludedTerm
 	}
 	relativeIndex := index - rf.lastIncludedIndex
-	if relativeIndex < 0 || relativeIndex >= Len(rf.log) {
+	if relativeIndex < 0 || relativeIndex >= int64(len(rf.log)) {
 		return -1
 	}
 	return rf.log[relativeIndex].Term
 }
 func (rf *Raft) getLastLogIndex() int64 {
-	if len(rf.log) == 0 {
+	if int64(len(rf.log)) == 0 {
 		return int64(rf.lastIncludedIndex)
 	}
-	return rf.lastIncludedIndex + Len(rf.log)
+	return rf.lastIncludedIndex + int64(len(rf.log))
 }
 func (rf *Raft) getLastLogTerm() int64 {
-	if len(rf.log) == 0 {
+	if int64(len(rf.log)) == 0 {
 		return rf.lastIncludedTerm
 	}
-	return rf.log[len(rf.log)-1].Term
+	return rf.log[int64(len(rf.log))-1].Term
 }
 func (rf *Raft) GetState() (int64, bool) {
 	rf.mu.Lock()
@@ -84,16 +84,16 @@ func (rf *Raft) GetState() (int64, bool) {
 	return term, isLeader
 }
 func (rf *Raft) GetRaftStateSize() int64 {
-    rf.mu.Lock()
-    defer rf.mu.Unlock()
-    
-    // 你需要调用存储层的接口来获取当前字节数
-    // 如果你的 store 封装了 persister，通常是 store.RaftStateSize()
-    return rf.store.RaftStateSize()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// 你需要调用存储层的接口来获取当前字节数
+	// 如果你的 store 封装了 persister，通常是 store.RaftStateSize()
+	return rf.store.RaftStateSize()
 }
 func (rf *Raft) persist() {
 	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
-	rf.store.Log.SaveLogs(rf.log)
+	// rf.store.Log.AppendLog(rf.log)
 }
 func (rf *Raft) readPersist(data []byte) {
 	term, votedFor, okState := rf.store.State.LoadState()
@@ -108,62 +108,62 @@ func (rf *Raft) readPersist(data []byte) {
 
 	snapMeta, _, okSnap := rf.store.Log.LoadSnapshot()
 	if okSnap && snapMeta != nil {
-        rf.lastIncludedIndex = snapMeta.LastIncludedIndex
-        rf.lastIncludedTerm = snapMeta.LastIncludedTerm
-        // 注意：snapshotData (第二个返回值) 在这里不需要处理
-        // 因为应用层 (KVServer) 会自己加载快照来恢复状态机
-    } else {
-        rf.lastIncludedIndex = 0
-        rf.lastIncludedTerm = 0
-    }
+		rf.lastIncludedIndex = snapMeta.LastIncludedIndex
+		rf.lastIncludedTerm = snapMeta.LastIncludedTerm
+		// 注意：snapshotData (第二个返回值) 在这里不需要处理
+		// 因为应用层 (KVServer) 会自己加载快照来恢复状态机
+	} else {
+		rf.lastIncludedIndex = 0
+		rf.lastIncludedTerm = 0
+	}
 	logs, okLog := rf.store.Log.LoadLogs()
-    if okLog {
-        rf.log = logs
-    } else {
-        rf.log = make([]*pb.LogEntry, 0)
-    }
+	if okLog {
+		rf.log = logs
+	} else {
+		rf.log = []*pb.LogEntry{{Term: 0, Command: nil}}
+	}
 }
 
 func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if rf.killed(){
+	if rf.killed() {
 		return
 	}
-	if index <= rf.lastIncludedIndex{
+	if index <= rf.lastIncludedIndex {
 		return
 	}
 	sliceIndex := index - rf.lastIncludedIndex
 	var lastIncludedTerm int64
-	if sliceIndex > 0 && sliceIndex <= Len(rf.log){
+	if sliceIndex > 0 && sliceIndex <= int64(len(rf.log)) {
 		lastIncludedTerm = rf.log[sliceIndex].Term
-	}else{
-		if index > rf.getLastLogIndex(){
+	} else {
+		if index > rf.getLastLogIndex() {
 			return
 		}
 		lastIncludedTerm = rf.lastIncludedTerm
 	}
 
-	if sliceIndex < Len(rf.log){
-		newLog := make([]*pb.LogEntry,len(rf.log[sliceIndex:]))
-		copy(newLog,rf.log[sliceIndex:])
+	if sliceIndex < int64(len(rf.log)) {
+		newLog := make([]*pb.LogEntry, len(rf.log[sliceIndex:]))
+		copy(newLog, rf.log[sliceIndex:])
 		rf.log = newLog
-	}else{
+	} else {
 		rf.log = make([]*pb.LogEntry, 0)
 	}
 	rf.lastIncludedIndex = index
 	rf.lastIncludedTerm = lastIncludedTerm
 
-	if index > rf.commitIndex{
+	if index > rf.commitIndex {
 		rf.commitIndex = index
 	}
-	if index > rf.lastApplied{
+	if index > rf.lastApplied {
 		rf.lastApplied = index
 	}
-	rf.store.Log.SaveSnapshot(rf.lastIncludedTerm,rf.lastIncludedIndex,snapshot)
-	rf.store.Log.SaveLogs(rf.log)
-	rf.store.State.SaveState(rf.currentTerm,rf.votedFor)
+	rf.store.Log.SaveSnapshot(rf.lastIncludedTerm, rf.lastIncludedIndex, snapshot)
+	rf.store.Log.RewriteLogs(rf.log)
+	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
 	if rf.state == Leader {
 		rf.sendHeartbeatAtOnce()
 	}
@@ -185,10 +185,12 @@ func (rf *Raft) Propose(command proto.Message) (int64, int64, bool) {
 	}
 	index = rf.getLastLogIndex() + 1
 	term = rf.currentTerm
-	rf.log = append(rf.log, &pb.LogEntry{
+	log := &pb.LogEntry{
 		Term:    term,
 		Command: cmdBytes,
-	})
+	}
+	rf.log = append(rf.log, log)
+	rf.store.Log.AppendLog([]*pb.LogEntry{log})
 	rf.persist()
 	// 立马发送心跳
 	rf.sendHeartbeatAtOnce()
@@ -212,6 +214,7 @@ func (rf *Raft) ticker() {
 			isLeader := rf.state == Leader
 			rf.mu.Unlock()
 			if !isLeader {
+				tool.Log.Info("Start to a new elecion", "id", rf.me)
 				go rf.sendRequestVote()
 			}
 		case <-rf.heartbeatCh:
@@ -306,19 +309,31 @@ func Make(peers []*RaftPeer, me int64,
 	rf.store = state
 	rf.me = me
 	rf.mu = sync.Mutex{}
+	rf.applyCond = sync.NewCond(&rf.mu)
 	atomic.StoreInt32(&rf.dead, 0)
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.votes = 1
+	rf.applyCh = applyCh
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.state = Follower
+	rf.nextIndex = make([]int64, len(peers))
+	rf.matchIndex = make([]int64, len(peers))
 
+	rf.log = []*pb.LogEntry{{Term: 0, Command: nil}}
 	rf.resetElectionTimerCh = make(chan struct{}, 1)
 	rf.sendHeartbeatAtOnceCh = make(chan struct{}, 1)
 	rf.electionCh = make(chan struct{}, 1)
 	rf.heartbeatCh = make(chan struct{}, 1)
 	rf.shutdownCh = make(chan struct{}, 1)
+	rf.readPersist(nil)
+
+	rf.commitIndex = max(rf.commitIndex, rf.lastIncludedIndex)
+	rf.lastApplied = max(rf.lastApplied, rf.lastIncludedIndex)
 	go rf.applier()
 	go rf.electionTimer()
-	// go rf.hea
+	go rf.heartbeatTimer()
 	go rf.ticker()
 	return rf
 }
@@ -360,8 +375,8 @@ func (rf *Raft) applier() {
 			for ; i < count; i++ {
 				logIndex := startIndex + i
 				sliceIndex := logIndex - rf.lastIncludedIndex
-				if sliceIndex < 0 || sliceIndex > Len(rf.log) {
-					tool.Log.Error("Applier index out of bound", "index", sliceIndex, "logLen", len(rf.log))
+				if sliceIndex < 0 || sliceIndex > int64(len(rf.log)) {
+					tool.Log.Error("Applier index out of bound", "index", sliceIndex, "log", int64(len(rf.log)))
 					break
 				}
 				applyMsgs[i] = raftapi.ApplyMsg{
@@ -384,23 +399,11 @@ func (rf *Raft) applier() {
 	}
 }
 
-func Len(command any) int64 {
-	v := reflect.ValueOf(command)
-
-	switch v.Kind() {
-	case reflect.Array, reflect.Slice, reflect.String, reflect.Map, reflect.Chan:
-		return int64(v.Len())
-	default:
-		return 0
-	}
-}
-
 const HeartbeatTimeout = 100
 
 func RandomElectionTimeout() time.Duration {
-	return time.Duration(250+rand.Intn(400)) * time.Millisecond
+	return time.Duration(600+rand.Intn(400)) * time.Millisecond
 }
 func StableHeartbeatTimeout() time.Duration {
-	// 测试器要求 leader 每秒发送检测信号 RPC 不超过 10 次。
 	return time.Duration(HeartbeatTimeout) * time.Millisecond
 }
