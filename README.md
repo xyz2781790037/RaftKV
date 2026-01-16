@@ -1,4 +1,10 @@
 # RaftKV
+### 实现
+```bash
+实现基本增删改查
+重启从本地恢复
+
+```
 ### struct
 ```Go
 type InstallSnapshotArgs struct {
