@@ -40,6 +40,7 @@ func (rf *Raft) sendRequestVote() {
 			}
 			if reply.Term > rf.currentTerm {
 				rf.becomeFollower(reply.Term)
+				tool.Log.Info("调用persist in send ")
 				rf.persist()
 				return
 			}
@@ -108,6 +109,7 @@ func (rf *Raft) sendAppendEntries() {
 			}
 			if reply.Term > rf.currentTerm {
 				rf.becomeFollower(reply.Term)
+				tool.Log.Info("调用persist in send ")
 				rf.persist()
 				return
 			}
@@ -169,6 +171,7 @@ func (rf *Raft) sendInstallSnapshot(server int, peer *RaftPeer) {
 	}
 	if reply.Term > rf.currentTerm {
 		rf.becomeFollower(reply.Term)
+		tool.Log.Info("调用persist in send ")
 		rf.persist()
 		return
 	}

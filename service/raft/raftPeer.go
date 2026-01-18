@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-const rpcTimeout = 200 * time.Millisecond
+const rpcTimeout = 3000 * time.Millisecond
 
 type RaftPeer struct {
 	mu   sync.Mutex // 保护连接字段

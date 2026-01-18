@@ -53,6 +53,7 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 		reply.VoteGranted = false
 	}
 	if persistNeeded {
+		tool.Log.Info("调用persist in raft_server ")
 		rf.persist()
 	}
 	tool.Log.Info("vote end", "result", reply.VoteGranted, "votedId", args.CandidateId, "Term", reply.Term)
@@ -91,6 +92,7 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 			reply.ConflictTerm = -1
 		}
 		if persistNeeded {
+			tool.Log.Info("调用persist in raft_server ")
 			rf.persist()
 		}
 		return reply, nil
@@ -105,6 +107,7 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		reply.ConflictIndex = i
 
 		if persistNeeded {
+			tool.Log.Info("调用persist in raft_server ")
 			rf.persist()
 		}
 		return reply, nil
@@ -150,6 +153,7 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		rf.applyCond.Signal()
 	}
 	if persistNeeded {
+		tool.Log.Info("调用persist in raft_server ")
 		rf.persist()
 	}
 
@@ -205,6 +209,7 @@ func (rf *Raft) InstallSnapshot(ctx context.Context, args *pb.InstallSnapshotArg
 
 	rf.store.Log.SaveSnapshot(rf.lastIncludedTerm, rf.lastIncludedIndex, args.Data)
 	rf.store.Log.AppendLog(rf.log)
+	tool.Log.Info("调用Save in raft_server")
 	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
 
 	snapshotMsg := raftapi.ApplyMsg{

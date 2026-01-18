@@ -46,15 +46,17 @@ func (kv *KVServer) GetRaft() pb.RaftServer {
 	return kv.rf.(*raft.Raft)
 }
 func (kv *KVServer) waitRaft(op *kvpb.Op) OpResult {
+	kv.mu.Lock()
 	index, term, isLeader := kv.rf.Propose(op)
 	if !isLeader {
+		kv.mu.Unlock()
 		return OpResult{
 			kvpb.Error_ERR_WRONG_LEADER, "", term,
 		}
 	}
-	kv.mu.Lock()
+	
 	if lastSeq, ok := kv.lastOperations[op.ClientId]; ok && lastSeq >= op.SeqId {
-		// 请求已完成！
+		tool.Log.Info("请求已完成！","op",op.Operation)
 		val := ""
 		if op.Operation == "Get" {
 			val = kv.db[op.Key] // 直接读取当前值
@@ -64,16 +66,18 @@ func (kv *KVServer) waitRaft(op *kvpb.Op) OpResult {
 	}
 	if kv.notifyChs == nil {
 		kv.notifyChs = make(map[int64]chan OpResult)
+		tool.Log.Info("notifyChs通知为空")
 	}
 	ch := make(chan OpResult, 1)
 	kv.notifyChs[index] = ch
 	kv.mu.Unlock()
+	tool.Log.Info("notifyChs通知传入成功")
 	// defer func() {
 	// 	kv.mu.Lock()
 	// 	delete(kv.notifyChs, index)
 	// 	kv.mu.Unlock()
 	// }()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
     defer cancel()
 	select {
 	case res := <-ch:
@@ -98,7 +102,7 @@ func (kv *KVServer) waitRaft(op *kvpb.Op) OpResult {
                 val = kv.db[op.Key]
             }
             kv.mu.Unlock()
-            tool.Log.Info("✅ 雖然超時但檢漏成功", "index", index)
+            tool.Log.Info("✅ 虽然超時但检漏成功", "index", index)
             // 返回成功，假裝沒超時！
             return OpResult{Err: kvpb.Error_OK, Value: val, Term: int64(term)}
         }
@@ -149,7 +153,7 @@ func StartKVServer(server []*raft.RaftPeer, me int64, persister *storage.Store, 
 	kv := &KVServer{
 		mu:           sync.Mutex{},
 		me:           me,
-		maxraftstate: -1,
+		maxraftstate: maxraftstate,
 		applyCh:      make(chan raftapi.ApplyMsg, 100),
 
 		// 必须初始化 Map，否则写入时会 panic
@@ -173,11 +177,14 @@ func StartKVServer(server []*raft.RaftPeer, me int64, persister *storage.Store, 
 }
 func (kv *KVServer) applier() {
 	for msg := range kv.applyCh {
+		tool.Log.Info("进入applier")
 		if kv.killed() {
+			tool.Log.Info("applier killed")
 			return
 		}
 		kv.mu.Lock()
 		if msg.CommandValid {
+			tool.Log.Info("进入applier1")
 			cmdBytes, ok := msg.Command.([]byte)
 			if !ok {
 				// 防御性编程：万一传过来的不是 bytes，打印个日志跳过
@@ -205,6 +212,7 @@ func (kv *KVServer) applier() {
 				if ok && lastSeq >= op.SeqId {
 					isRepeated = true
 				}
+				tool.Log.Info("进入oplast","isRepeated",isRepeated)
 			}
 			if !isRepeated {
 				switch op.Operation {
@@ -248,6 +256,7 @@ func (kv *KVServer) applier() {
 				kv.rf.Snapshot(msg.CommandIndex, snapshotData)
 			}
 		} else if msg.SnapshotValid {
+			tool.Log.Info("进入applier2")
 			kv.Restore(msg.Snapshot)
 			for index := range kv.notifyChs {
 				if index <= msg.SnapshotIndex {

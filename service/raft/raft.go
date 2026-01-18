@@ -68,7 +68,7 @@ func (rf *Raft) getLastLogIndex() int64 {
 	if int64(len(rf.log)) == 0 {
 		return int64(rf.lastIncludedIndex)
 	}
-	return rf.lastIncludedIndex + int64(len(rf.log))
+	return rf.lastIncludedIndex + int64(len(rf.log)) - 1
 }
 func (rf *Raft) getLastLogTerm() int64 {
 	if int64(len(rf.log)) == 0 {
@@ -92,6 +92,7 @@ func (rf *Raft) GetRaftStateSize() int64 {
 	return rf.store.RaftStateSize()
 }
 func (rf *Raft) persist() {
+	tool.Log.Info("调用Save in persist")
 	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
 	// rf.store.Log.AppendLog(rf.log)
 }
@@ -118,7 +119,8 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	logs, okLog := rf.store.Log.LoadLogs()
 	if okLog {
-		rf.log = logs
+		dummy := &pb.LogEntry{Term: rf.lastIncludedTerm, Command: nil}
+        rf.log = append([]*pb.LogEntry{dummy}, logs...)
 	} else {
 		rf.log = []*pb.LogEntry{{Term: 0, Command: nil}}
 	}
@@ -163,6 +165,7 @@ func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 	}
 	rf.store.Log.SaveSnapshot(rf.lastIncludedTerm, rf.lastIncludedIndex, snapshot)
 	rf.store.Log.RewriteLogs(rf.log)
+	tool.Log.Info("调用Save in snapshot")
 	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
 	if rf.state == Leader {
 		rf.sendHeartbeatAtOnce()
@@ -191,6 +194,7 @@ func (rf *Raft) Propose(command proto.Message) (int64, int64, bool) {
 	}
 	rf.log = append(rf.log, log)
 	rf.store.Log.AppendLog([]*pb.LogEntry{log})
+	tool.Log.Info("no调用persist in start() ")
 	rf.persist()
 	// 立马发送心跳
 	rf.sendHeartbeatAtOnce()
