@@ -30,8 +30,8 @@ type KVServer struct {
 	applyCh chan raftapi.ApplyMsg
 	dead    int32 // 原子操作，用于 Kill
 
-	maxraftstate int64 // 快照阈值
-
+	maxraftstate     int64 // 快照阈值
+	lastAppliedIndex int64
 	// --- 状态机 (State Machine) ---
 	db             map[string]string // 内存数据库
 	lastOperations map[int64]int64   // 去重表: ClientId -> LastSeqId
@@ -54,13 +54,10 @@ func (kv *KVServer) waitRaft(op *kvpb.Op) OpResult {
 			kvpb.Error_ERR_WRONG_LEADER, "", term,
 		}
 	}
-	
+
 	if lastSeq, ok := kv.lastOperations[op.ClientId]; ok && lastSeq >= op.SeqId {
-		tool.Log.Info("请求已完成！","op",op.Operation)
+		tool.Log.Info("请求已完成！", "op", op.Operation)
 		val := ""
-		if op.Operation == "Get" {
-			val = kv.db[op.Key] // 直接读取当前值
-		}
 		kv.mu.Unlock()
 		return OpResult{Err: kvpb.Error_OK, Value: val, Term: int64(term)}
 	}
@@ -78,7 +75,7 @@ func (kv *KVServer) waitRaft(op *kvpb.Op) OpResult {
 	// 	kv.mu.Unlock()
 	// }()
 	ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
-    defer cancel()
+	defer cancel()
 	select {
 	case res := <-ch:
 		kv.mu.Lock()
@@ -94,38 +91,52 @@ func (kv *KVServer) waitRaft(op *kvpb.Op) OpResult {
 		return res
 	case <-ctx.Done():
 		// 千萬別直接返回 Timeout！先看看是不是已經做完了！
-        kv.mu.Lock()
-        if lastSeq, ok := kv.lastOperations[op.ClientId]; ok && lastSeq >= op.SeqId {
-            // 如果是 Get，還得去讀一下 Value
-            val := ""
-            if op.Operation == "Get" {
-                val = kv.db[op.Key]
-            }
-            kv.mu.Unlock()
-            tool.Log.Info("✅ 虽然超時但检漏成功", "index", index)
-            // 返回成功，假裝沒超時！
-            return OpResult{Err: kvpb.Error_OK, Value: val, Term: int64(term)}
-        }
-        kv.mu.Unlock()
+		kv.mu.Lock()
+		if lastSeq, ok := kv.lastOperations[op.ClientId]; ok && lastSeq >= op.SeqId {
+			// 如果是 Get，還得去讀一下 Value
+			val := ""
+			kv.mu.Unlock()
+			tool.Log.Info("✅ 虽然超時但检漏成功", "index", index)
+			// 返回成功，假裝沒超時！
+			return OpResult{Err: kvpb.Error_OK, Value: val, Term: int64(term)}
+		}
+		kv.mu.Unlock()
 		return OpResult{
 			Err: kvpb.Error_ERR_TIMEOUT,
 		}
 	}
 }
 func (kv *KVServer) Get(ctx context.Context, args *kvpb.GetArgs) (*kvpb.GetReply, error) {
+	reply := &kvpb.GetReply{}
+	readIndex, isLeader := kv.rf.ReadIndex()
+	if !isLeader {
+		reply.Err = kvpb.Error_ERR_WRONG_LEADER
+		return reply, nil
+	}
 
-	op := &kvpb.Op{
-		Operation: "Get",
-		Key:       args.Key,
-		ClientId:  args.ClientId,
-		SeqId:     args.SeqId,
+	timer := time.NewTimer(1000 * time.Millisecond)
+	defer timer.Stop()
+	for {
+		kv.mu.Lock()
+		if kv.lastAppliedIndex >= readIndex {
+			if val, ok := kv.db[args.Key]; ok {
+				reply.Value = val
+				reply.Err = kvpb.Error_OK
+			} else {
+				reply.Value = ""
+				reply.Err = kvpb.Error_ERR_NO_KEY
+			}
+			kv.mu.Unlock()
+			return reply, nil
+		}
+		kv.mu.Unlock()
+		select{
+		case <-timer.C:
+			reply.Err = kvpb.Error_ERR_TIMEOUT
+			return reply,nil
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	res := kv.waitRaft(op)
-	reply := kvpb.GetReply{
-		Value: res.Value,
-		Err:   res.Err,
-	}
-	return &reply, nil
 }
 func (kv *KVServer) PutAppend(ctx context.Context, args *kvpb.PutAppendArgs) (*kvpb.PutAppendReply, error) {
 	op := &kvpb.Op{
@@ -149,7 +160,7 @@ func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
 }
-func StartKVServer(server []*raft.RaftPeer, me int64, persister *storage.Store, maxraftstate int64) *KVServer {
+func StartKVServer(server *raft.PeerManager, me int64, persister *storage.Store, maxraftstate int64) *KVServer {
 	kv := &KVServer{
 		mu:           sync.Mutex{},
 		me:           me,
@@ -212,7 +223,7 @@ func (kv *KVServer) applier() {
 				if ok && lastSeq >= op.SeqId {
 					isRepeated = true
 				}
-				tool.Log.Info("进入oplast","isRepeated",isRepeated)
+				tool.Log.Info("进入oplast", "isRepeated", isRepeated)
 			}
 			if !isRepeated {
 				switch op.Operation {
@@ -222,13 +233,6 @@ func (kv *KVServer) applier() {
 					kv.db[op.Key] += op.Value
 				case "Delete":
 					delete(kv.db, op.Key)
-				case "Get":
-					if val, ok := kv.db[op.Key]; ok {
-						result.Value = val
-					} else {
-						result.Err = kvpb.Error_ERR_NO_KEY
-						result.Value = ""
-					}
 				}
 				// if op.Operation != "Get" {
 				kv.lastOperations[op.ClientId] = op.SeqId
@@ -236,7 +240,7 @@ func (kv *KVServer) applier() {
 			} else {
 				result.Err = kvpb.Error_OK
 			}
-			// 在 applier 函数里
+			kv.lastAppliedIndex = msg.CommandIndex
 			if ch, ok := kv.notifyChs[msg.CommandIndex]; ok {
 				// 强制发送，不要用 select default，看看会不会阻塞
 				// 或者加上详细日志
@@ -264,7 +268,7 @@ func (kv *KVServer) applier() {
 					case kv.notifyChs[index] <- OpResult{Err: kvpb.Error_ERR_WRONG_LEADER, Value: ""}:
 					default:
 					}
-					
+
 				}
 				delete(kv.notifyChs, index)
 			}
@@ -309,17 +313,4 @@ func (kv *KVServer) Restore(data []byte) {
 	if kv.lastOperations == nil {
 		kv.lastOperations = make(map[int64]int64)
 	}
-}
-func (kv *KVServer) clearNotifyChsForSnapshot(snapshotIndex int64) {
-    kv.mu.Lock()
-    defer kv.mu.Unlock()
-    
-    // 清除所有在快照索引之前的 Channel
-    for index := range kv.notifyChs {
-        if index <= snapshotIndex {
-            delete(kv.notifyChs, index)
-        }
-    }
-    // 同时清除所有 Channel（更安全的方式）
-    kv.notifyChs = make(map[int64]chan OpResult)
 }

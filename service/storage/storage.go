@@ -130,9 +130,14 @@ func NewLogStore(dataDir string, nodeID int64) *LogStore {
 func (l *LogStore) AppendLog(logs []*pb.LogEntry) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	dir := filepath.Dir(l.filePath)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		os.MkdirAll(dir, 0755)
+	}
 	f, err := os.OpenFile(l.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		tool.Log.Error("Failed to write data in path", "err", err, "Path", l.filePath)
+		return
 	}
 	defer f.Close()
 	for _, entry := range logs {

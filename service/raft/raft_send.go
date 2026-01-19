@@ -18,18 +18,19 @@ func (rf *Raft) sendRequestVote() {
 	rf.becomeCandidate()
 	rf.resetElectionTimer()
 	args := pb.RequestVoteArgs{
-		Term:        rf.currentTerm,
-		CandidateId: rf.me,
+		Term:         rf.currentTerm,
+		CandidateId:  rf.me,
 		LastLogIndex: rf.getLastLogIndex(),
-		LastLogTerm: rf.getLastLogTerm(),
+		LastLogTerm:  rf.getLastLogTerm(),
 	}
 	rf.mu.Unlock()
-	for i, peer := range rf.peers {
-		if i == int(rf.me) {
+	peers := rf.peers.CloneList()
+	for _,peer := range peers {
+		if peer.id == rf.me {
 			continue
 		}
-		go func(peers *RaftPeer) {
-			reply, ok := peers.CallRequestVote(&args)
+		go func(peer *RaftPeer) {
+			reply, ok := peer.CallRequestVote(&args)
 			if !ok {
 				return
 			}
@@ -46,7 +47,7 @@ func (rf *Raft) sendRequestVote() {
 			}
 			if reply.VoteGranted {
 				rf.votes++
-				if rf.votes > int32(len(rf.peers)/2) && rf.state == Candidate && rf.currentTerm == args.Term {
+				if rf.votes >= int32(rf.peers.QuorumSize()) && rf.state == Candidate && rf.currentTerm == args.Term {
 					rf.becomeLeader()
 					rf.sendHeartbeatAtOnce()
 				}
@@ -64,23 +65,26 @@ func (rf *Raft) sendAppendEntries() {
 	leaderID := rf.me
 	leaderCommit := rf.commitIndex
 	rf.mu.Unlock()
-	for i, peer := range rf.peers {
-		if i == int(rf.me) {
+	heartbeatAckCount := 1
+	peers := rf.peers.CloneList()
+	for _, peer := range peers {
+		if peer.id == rf.me {
 			continue
 		}
-		go func(i int, peer *RaftPeer) {
+		go func(peer *RaftPeer) {
 			rf.mu.Lock()
 			if rf.killed() || rf.state != Leader || rf.currentTerm != currentTerm {
 				rf.mu.Unlock()
 				return
 			}
+			i := peer.id
 			nextIndex := rf.nextIndex[i]
 			if nextIndex <= rf.lastIncludedIndex {
 				rf.mu.Unlock()
 				go rf.sendInstallSnapshot(i, peer)
 				return
 			}
-
+			
 			prevLogIndex := nextIndex - 1
 			prevLogTerm := rf.getLogTerm(prevLogIndex)
 
@@ -117,6 +121,15 @@ func (rf *Raft) sendAppendEntries() {
 				rf.matchIndex[i] = prevLogIndex + int64(len(args.Entries))
 				rf.nextIndex[i] = rf.matchIndex[i] + 1
 				rf.updateCommitIndex()
+				if len(entries) == 0 {
+					heartbeatAckCount++
+					if heartbeatAckCount == rf.peers.QuorumSize() {
+						select {
+						case rf.readIndexNotifyCh <- struct{}{}:
+						default:
+						}
+					}
+				}
 			} else {
 				if reply.ConflictTerm == -1 {
 					rf.nextIndex[i] = reply.ConflictIndex
@@ -135,11 +148,11 @@ func (rf *Raft) sendAppendEntries() {
 					}
 				}
 			}
-		}(i, peer)
+		}(peer)
 	}
 
 }
-func (rf *Raft) sendInstallSnapshot(server int, peer *RaftPeer) {
+func (rf *Raft) sendInstallSnapshot(server int64, peer *RaftPeer) {
 	snapMeta, snapshotData, ok := rf.store.Log.LoadSnapshot()
 	if !ok {
 		tool.Log.Error("Failed to load snapshot in applier")
@@ -185,18 +198,21 @@ func (rf *Raft) sendInstallSnapshot(server int, peer *RaftPeer) {
 func (rf *Raft) updateCommitIndex() {
 	// 假设 rf.matchIndex 已经是 []int64 类型了
 	// 假设 rf.commitIndex, rf.getLastLogIndex() 都是 int64
+	allIDs := rf.peers.ListIDs()
+	// 1. 集所有节点的 matchIndex (用 int64 切片)
+	// 这里要注意：make 的长度是 int，但里面的内容是 int64收
+	matchIndexes := make([]int64, 0, len(allIDs))
+	// matchIndexes := make(map[int]int64)
 
-	// 1. 收集所有节点的 matchIndex (用 int64 切片)
-	// 这里要注意：make 的长度是 int，但里面的内容是 int64
-	matchIndexes := make([]int64, len(rf.peers))
-
-	for i := range rf.peers {
-		if i == int(rf.me) {
-			// Leader 自己的进度就是最新的日志索引
-			matchIndexes[i] = rf.getLastLogIndex()
-		} else {
-			matchIndexes[i] = rf.matchIndex[i]
+	// 3. 把值从 Map 提取到切片中
+	for _, id := range allIDs {
+		if id == rf.me {
+			// Leader 自己的进度就是最后一条日志的索引
+			matchIndexes = append(matchIndexes, rf.getLastLogIndex())
+			continue
 		}
+		// 从 Map 中取值并放入切片
+		matchIndexes = append(matchIndexes, rf.matchIndex[id])
 	}
 
 	// 2. 排序 (关键修改！)
@@ -209,7 +225,8 @@ func (rf *Raft) updateCommitIndex() {
 	// 比如 3 个节点，len/2 = 1，取排序后第 2 个
 	// 比如 5 个节点，len/2 = 2，取排序后第 3 个
 	// 这个位置的值，保证了至少有 (N/2 + 1) 个节点达到了这个值
-	newCommitIndex := matchIndexes[len(rf.peers)/2]
+	quorum := rf.peers.QuorumSize()
+    newCommitIndex := matchIndexes[len(allIDs) - quorum]
 
 	// 4. 检查 Term (Raft 论文 Figure 8 的限制)
 	// 只有当前 Term 的日志被复制过半，才能提交
@@ -228,43 +245,43 @@ func (rf *Raft) updateCommitIndex() {
 	}
 }
 func (rf *Raft) getEntriesToSend(nextIndex int64) []*pb.LogEntry {
-    lastLogIndex := rf.getLastLogIndex()
-    
-    // 如果需要的日志比我有的还新，或者需要发快照，直接返回 nil
-    if nextIndex > lastLogIndex {
-        return nil
-    }
+	lastLogIndex := rf.getLastLogIndex()
 
-    // 真正的切片起始下标 (因为 log[0] 对应 lastIncludedIndex)
-    // 假设 lastIncludedIndex=0, log=[dummy, A, B]. nextIndex=1. 
-    // realIndex = 1 - 0 = 1. 取 log[1] (A). 正确。
-    realIndex := nextIndex - rf.lastIncludedIndex
-    
-    // 防御：如果计算出的下标不合法
-    if realIndex < 0 || realIndex >= int64(len(rf.log)) {
-        return nil
-    }
+	// 如果需要的日志比我有的还新，或者需要发快照，直接返回 nil
+	if nextIndex > lastLogIndex {
+		return nil
+	}
 
-    // 限制单次发送数量 (防止包过大)
-    endIndex := lastLogIndex + 1
-    if endIndex > nextIndex+MaxLogEntriesPerRPC {
-        endIndex = nextIndex + MaxLogEntriesPerRPC
-    }
-    
-    realEnd := endIndex - rf.lastIncludedIndex
-    if realEnd > int64(len(rf.log)) {
-        realEnd = int64(len(rf.log))
-    }
+	// 真正的切片起始下标 (因为 log[0] 对应 lastIncludedIndex)
+	// 假设 lastIncludedIndex=0, log=[dummy, A, B]. nextIndex=1.
+	// realIndex = 1 - 0 = 1. 取 log[1] (A). 正确。
+	realIndex := nextIndex - rf.lastIncludedIndex
 
-    //再次防御
-    if realIndex >= realEnd {
-        return nil
-    }
+	// 防御：如果计算出的下标不合法
+	if realIndex < 0 || realIndex >= int64(len(rf.log)) {
+		return nil
+	}
 
-    // 深度拷贝，防止并发问题
-    entries := make([]*pb.LogEntry, realEnd-realIndex)
-    copy(entries, rf.log[realIndex:realEnd])
-    return entries
+	// 限制单次发送数量 (防止包过大)
+	endIndex := lastLogIndex + 1
+	if endIndex > nextIndex+MaxLogEntriesPerRPC {
+		endIndex = nextIndex + MaxLogEntriesPerRPC
+	}
+
+	realEnd := endIndex - rf.lastIncludedIndex
+	if realEnd > int64(len(rf.log)) {
+		realEnd = int64(len(rf.log))
+	}
+
+	//再次防御
+	if realIndex >= realEnd {
+		return nil
+	}
+
+	// 深度拷贝，防止并发问题
+	entries := make([]*pb.LogEntry, realEnd-realIndex)
+	copy(entries, rf.log[realIndex:realEnd])
+	return entries
 }
 func (rf *Raft) becomeCandidate() {
 	rf.state = Candidate
@@ -279,16 +296,17 @@ func (rf *Raft) becomeFollower(term int64) {
 }
 func (rf *Raft) becomeLeader() {
 	if rf.state == Leader {
-        return
-    }
+		return
+	}
 	rf.state = Leader
 	lastLogIndex := rf.getLastLogIndex()
-	for i := range rf.peers {
-		if i == int(rf.me) {
+	allIDs := rf.peers.ListIDs()
+	for _, id := range allIDs {
+		if id == rf.me {
 			continue
 		}
-		rf.nextIndex[i] = lastLogIndex + 1
-		rf.matchIndex[i] = 0
+		rf.nextIndex[id] = lastLogIndex + 1
+		rf.matchIndex[id] = 0
 	}
-	fmt.Println("\033[1;36m",rf.me,"become new Leader","Term=",rf.currentTerm,"\033[0m")
+	fmt.Println("\033[1;36m", rf.me, "become new Leader", "Term=", rf.currentTerm, "\033[0m")
 }

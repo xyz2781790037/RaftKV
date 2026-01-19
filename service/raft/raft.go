@@ -6,6 +6,7 @@ import (
 	"RaftKV/service/raftapi"
 	"RaftKV/service/storage"
 	"RaftKV/tool"
+	"context"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -24,7 +25,7 @@ const (
 
 type Raft struct {
 	mu    sync.Mutex     // Lock to protect shared access to this peer's state
-	peers []*RaftPeer    // RPC end point64s of all peers
+	peers *PeerManager    // RPC end point64s of all peers
 	store *storage.Store // Object to hold this peer's persisted state
 	me    int64          // this peer's index int64o peers[]
 	dead  int32          // set by Kill()
@@ -38,8 +39,8 @@ type Raft struct {
 	commitIndex int64 // 已被集群大多数节点提交的日志条目索引
 	lastApplied int64 // 此节点已应用到状态机的日志条目索引
 	// volatile state on leaders
-	nextIndex  []int64 // 对于第i个服务器，领导者发送心跳的时候，从nextIndex[i]开始发送日志条目
-	matchIndex []int64 // 对于第i个服务器，从[1, matchIndex[i]]的日志条目和leader的日志条目一致
+	nextIndex  map[int64]int64 // 对于第i个服务器，领导者发送心跳的时候，从nextIndex[i]开始发送日志条目
+	matchIndex map[int64]int64 // 对于第i个服务器，从[1, matchIndex[i]]的日志条目和leader的日志条目一致
 
 	state                 PeerState
 	resetElectionTimerCh  chan struct{} // 重置选举定时器的通道
@@ -47,6 +48,7 @@ type Raft struct {
 	electionCh            chan struct{} // 选举定时器超时通知通道
 	heartbeatCh           chan struct{} // 心跳定时器超时通知通道
 	shutdownCh            chan struct{} // 当节点被杀死时，关闭所有通道
+	readIndexNotifyCh chan struct{} //读取数据的通道
 	applyCh               chan raftapi.ApplyMsg
 	applyCond             *sync.Cond // 用于通知 ApplyMsg 的条件变量
 	// for 3D
@@ -75,6 +77,24 @@ func (rf *Raft) getLastLogTerm() int64 {
 		return rf.lastIncludedTerm
 	}
 	return rf.log[int64(len(rf.log))-1].Term
+}
+func (rf *Raft)ReadIndex() (int64, bool){
+	rf.mu.Lock()
+    if rf.state != Leader {
+        rf.mu.Unlock()
+        return -1, false
+    }
+	readIndex := rf.commitIndex
+	rf.sendHeartbeatAtOnce()
+	rf.mu.Unlock()
+	ctx,cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	select {
+    case <-rf.readIndexNotifyCh:
+        return readIndex, true
+    case <-ctx.Done():
+        return -1, false
+    }
 }
 func (rf *Raft) GetState() (int64, bool) {
 	rf.mu.Lock()
@@ -306,7 +326,7 @@ func (rf *Raft) sendHeartbeatAtOnce() {
 	}
 }
 
-func Make(peers []*RaftPeer, me int64,
+func Make(peers *PeerManager, me int64,
 	state *storage.Store, applyCh chan raftapi.ApplyMsg) raftapi.Raft {
 	rf := &Raft{}
 	rf.peers = peers
@@ -322,8 +342,8 @@ func Make(peers []*RaftPeer, me int64,
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.state = Follower
-	rf.nextIndex = make([]int64, len(peers))
-	rf.matchIndex = make([]int64, len(peers))
+	rf.nextIndex = make(map[int64]int64)
+	rf.matchIndex = make(map[int64]int64)
 
 	rf.log = []*pb.LogEntry{{Term: 0, Command: nil}}
 	rf.resetElectionTimerCh = make(chan struct{}, 1)
@@ -331,6 +351,7 @@ func Make(peers []*RaftPeer, me int64,
 	rf.electionCh = make(chan struct{}, 1)
 	rf.heartbeatCh = make(chan struct{}, 1)
 	rf.shutdownCh = make(chan struct{}, 1)
+	rf.readIndexNotifyCh = make(chan struct{}, 100)
 	rf.readPersist(nil)
 
 	rf.commitIndex = max(rf.commitIndex, rf.lastIncludedIndex)
@@ -410,4 +431,28 @@ func RandomElectionTimeout() time.Duration {
 }
 func StableHeartbeatTimeout() time.Duration {
 	return time.Duration(HeartbeatTimeout) * time.Millisecond
+}
+func (rf *Raft) AddNode(id int64, addr string) {
+	isNew := rf.peers.AddPeer(id, addr)
+	
+	// 2. 共识层状态初始化 (Raft 自己的逻辑)
+	if isNew && rf.state == Leader {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		// 初始化新节点的进度
+		rf.nextIndex[id] = rf.getLastLogIndex() + 1
+		rf.matchIndex[id] = 0
+	}
+}
+
+// 封装业务层的 RemoveServer
+func (rf *Raft) RemoveNode(id int64) {
+	// 1. 网络层移除
+	rf.peers.RemovePeer(id)
+
+	// 2. 共识层清理
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	delete(rf.nextIndex, id)
+	delete(rf.matchIndex, id)
 }
