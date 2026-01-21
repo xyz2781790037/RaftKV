@@ -384,58 +384,6 @@ func (x *Op) GetSeqId() int64 {
 	return 0
 }
 
-type KVSnapshot struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Data           map[string]string      `protobuf:"bytes,1,rep,name=Data,proto3" json:"Data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	LastOperations map[int64]int64        `protobuf:"bytes,2,rep,name=LastOperations,proto3" json:"LastOperations,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *KVSnapshot) Reset() {
-	*x = KVSnapshot{}
-	mi := &file_kvraft_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *KVSnapshot) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*KVSnapshot) ProtoMessage() {}
-
-func (x *KVSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_kvraft_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use KVSnapshot.ProtoReflect.Descriptor instead.
-func (*KVSnapshot) Descriptor() ([]byte, []int) {
-	return file_kvraft_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *KVSnapshot) GetData() map[string]string {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *KVSnapshot) GetLastOperations() map[int64]int64 {
-	if x != nil {
-		return x.LastOperations
-	}
-	return nil
-}
-
 var File_kvraft_proto protoreflect.FileDescriptor
 
 const file_kvraft_proto_rawDesc = "" +
@@ -461,17 +409,7 @@ const file_kvraft_proto_rawDesc = "" +
 	"\x03Key\x18\x02 \x01(\tR\x03Key\x12\x14\n" +
 	"\x05Value\x18\x03 \x01(\tR\x05Value\x12\x1a\n" +
 	"\bClientId\x18\x04 \x01(\x03R\bClientId\x12\x14\n" +
-	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId\"\x8a\x02\n" +
-	"\n" +
-	"KVSnapshot\x120\n" +
-	"\x04Data\x18\x01 \x03(\v2\x1c.kvraft.KVSnapshot.DataEntryR\x04Data\x12N\n" +
-	"\x0eLastOperations\x18\x02 \x03(\v2&.kvraft.KVSnapshot.LastOperationsEntryR\x0eLastOperations\x1a7\n" +
-	"\tDataEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aA\n" +
-	"\x13LastOperationsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\x03R\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01*W\n" +
+	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId*W\n" +
 	"\x05Error\x12\x0f\n" +
 	"\vERR_UNKNOWN\x10\x00\x12\x06\n" +
 	"\x02OK\x10\x01\x12\x0e\n" +
@@ -496,7 +434,7 @@ func file_kvraft_proto_rawDescGZIP() []byte {
 }
 
 var file_kvraft_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kvraft_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_kvraft_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_kvraft_proto_goTypes = []any{
 	(Error)(0),             // 0: kvraft.Error
 	(*PutAppendArgs)(nil),  // 1: kvraft.PutAppendArgs
@@ -504,24 +442,19 @@ var file_kvraft_proto_goTypes = []any{
 	(*GetArgs)(nil),        // 3: kvraft.GetArgs
 	(*GetReply)(nil),       // 4: kvraft.GetReply
 	(*Op)(nil),             // 5: kvraft.Op
-	(*KVSnapshot)(nil),     // 6: kvraft.KVSnapshot
-	nil,                    // 7: kvraft.KVSnapshot.DataEntry
-	nil,                    // 8: kvraft.KVSnapshot.LastOperationsEntry
 }
 var file_kvraft_proto_depIdxs = []int32{
 	0, // 0: kvraft.PutAppendReply.err:type_name -> kvraft.Error
 	0, // 1: kvraft.GetReply.err:type_name -> kvraft.Error
-	7, // 2: kvraft.KVSnapshot.Data:type_name -> kvraft.KVSnapshot.DataEntry
-	8, // 3: kvraft.KVSnapshot.LastOperations:type_name -> kvraft.KVSnapshot.LastOperationsEntry
-	3, // 4: kvraft.RaftKV.Get:input_type -> kvraft.GetArgs
-	1, // 5: kvraft.RaftKV.PutAppend:input_type -> kvraft.PutAppendArgs
-	4, // 6: kvraft.RaftKV.Get:output_type -> kvraft.GetReply
-	2, // 7: kvraft.RaftKV.PutAppend:output_type -> kvraft.PutAppendReply
-	6, // [6:8] is the sub-list for method output_type
-	4, // [4:6] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	3, // 2: kvraft.RaftKV.Get:input_type -> kvraft.GetArgs
+	1, // 3: kvraft.RaftKV.PutAppend:input_type -> kvraft.PutAppendArgs
+	4, // 4: kvraft.RaftKV.Get:output_type -> kvraft.GetReply
+	2, // 5: kvraft.RaftKV.PutAppend:output_type -> kvraft.PutAppendReply
+	4, // [4:6] is the sub-list for method output_type
+	2, // [2:4] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_kvraft_proto_init() }
@@ -535,7 +468,7 @@ func file_kvraft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kvraft_proto_rawDesc), len(file_kvraft_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

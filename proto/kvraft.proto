@@ -42,11 +42,6 @@ message Op {
     int64 SeqId = 5;
 }
 
-message KVSnapshot {
-    map<string, string> Data = 1;
-    map<int64, int64> LastOperations = 2;
-}
-
 service RaftKV {
     rpc Get(GetArgs) returns (GetReply);
     rpc PutAppend(PutAppendArgs) returns (PutAppendReply);
