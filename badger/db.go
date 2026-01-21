@@ -136,21 +136,13 @@ func (db *DB) Backup() ([]byte, error) {
 	}
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-
-	// 使用 Gob 序列化所有 Entry
-	// 注意：工业级实现通常直接拷贝 SST 文件，但作为 minibadger，我们直接把内存数据打包
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
-
-	// 使用 SkipList 的 Scan 遍历所有数据
 	var err error
 	db.skl.Scan(func(e *skl.Entry) bool {
-		// 过滤掉已删除的数据 (Tombstone)，减小快照体积
 		if e.IsDeleted() {
 			return true // continue
 		}
-		// 序列化 Key, Value, Meta
-		// 为了简单，我们定义一个临时的结构体，或者直接编码
 		if encodeErr := enc.Encode(e.Key); encodeErr != nil {
 			err = encodeErr
 			return false
@@ -171,35 +163,25 @@ func (db *DB) Backup() ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
-
-// LoadFrom 从快照数据恢复数据库
-// ⚠️ 警告：这会清空当前数据库的所有数据！
 func (db *DB) LoadFrom(data []byte) error {
 	if err := db.checkClosed(); err != nil {
 		return err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
-	// 1. 重置内存跳表
 	db.skl = skl.NewSkiplist()
 
-	// 2. 重置 WAL (关键：快照恢复意味着旧日志作废)
-	// 我们需要关闭文件，截断为 0，再重新打开
 	if err := db.wal.Close(); err != nil {
 		return err
 	}
 	if err := os.Truncate(db.wal.path, 0); err != nil {
 		return err
 	}
-	// 重新打开 WAL
 	newWal, err := OpenWAL(db.wal.path)
 	if err != nil {
 		return err
 	}
 	db.wal = newWal
-
-	// 3. 解析数据并重新写入
 	if len(data) == 0 {
 		return nil
 	}
@@ -229,7 +211,6 @@ func (db *DB) LoadFrom(data []byte) error {
 		entry.Meta = meta
 		batch = append(batch, entry)
 
-		// 分批写入，防止内存突增
 		if len(batch) >= 1000 {
 			if err := db.wal.WriteBatch(batch); err != nil {
 				return err
@@ -240,8 +221,6 @@ func (db *DB) LoadFrom(data []byte) error {
 			batch = batch[:0]
 		}
 	}
-
-	// 写入剩余的
 	if len(batch) > 0 {
 		if err := db.wal.WriteBatch(batch); err != nil {
 			return err
