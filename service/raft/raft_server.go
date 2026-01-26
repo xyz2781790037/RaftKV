@@ -153,7 +153,7 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		rf.applyCond.Signal()
 	}
 	if persistNeeded {
-		tool.Log.Info("调用persist in raft_server ")
+		// tool.Log.Info("调用persist in raft_server ")
 		rf.persist()
 	}
 

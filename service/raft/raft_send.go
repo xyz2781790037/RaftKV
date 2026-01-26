@@ -308,5 +308,8 @@ func (rf *Raft) becomeLeader() {
 		rf.nextIndex[id] = lastLogIndex + 1
 		rf.matchIndex[id] = 0
 	}
+	go func(){
+		rf.Propose(nil)
+	}()
 	fmt.Println("\033[1;36m", rf.me, "become new Leader", "Term=", rf.currentTerm, "\033[0m")
 }

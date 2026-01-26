@@ -75,7 +75,7 @@ func (rp *RaftPeer) CallAppendEntries(in *pb.AppendEntriesArgs) (*pb.AppendEntri
 
 	reply, err := stub.AppendEntries(ctx, in)
 	if err != nil {
-		tool.Log.Error("AppendEntries failed", "err", err)
+		// tool.Log.Error("AppendEntries failed", "err", err)
 		return nil, false
 	}
 	return reply, true

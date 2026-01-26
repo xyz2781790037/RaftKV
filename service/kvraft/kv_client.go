@@ -104,7 +104,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			continue
 
 		case kvpb.Error_OK:
-			tool.Log.Info("succeed to return")
 			return
 		}
 	}

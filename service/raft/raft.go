@@ -25,7 +25,7 @@ const (
 
 type Raft struct {
 	mu    sync.Mutex     // Lock to protect shared access to this peer's state
-	peers *PeerManager    // RPC end point64s of all peers
+	peers *PeerManager   // RPC end point64s of all peers
 	store *storage.Store // Object to hold this peer's persisted state
 	me    int64          // this peer's index int64o peers[]
 	dead  int32          // set by Kill()
@@ -48,7 +48,7 @@ type Raft struct {
 	electionCh            chan struct{} // 选举定时器超时通知通道
 	heartbeatCh           chan struct{} // 心跳定时器超时通知通道
 	shutdownCh            chan struct{} // 当节点被杀死时，关闭所有通道
-	readIndexNotifyCh chan struct{} //读取数据的通道
+	readIndexNotifyCh     chan struct{} //读取数据的通道
 	applyCh               chan raftapi.ApplyMsg
 	applyCond             *sync.Cond // 用于通知 ApplyMsg 的条件变量
 	// for 3D
@@ -78,23 +78,23 @@ func (rf *Raft) getLastLogTerm() int64 {
 	}
 	return rf.log[int64(len(rf.log))-1].Term
 }
-func (rf *Raft)ReadIndex() (int64, bool){
+func (rf *Raft) ReadIndex() (int64, bool) {
 	rf.mu.Lock()
-    if rf.state != Leader {
-        rf.mu.Unlock()
-        return -1, false
-    }
+	if rf.state != Leader {
+		rf.mu.Unlock()
+		return -1, false
+	}
 	readIndex := rf.commitIndex
 	rf.sendHeartbeatAtOnce()
 	rf.mu.Unlock()
-	ctx,cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	select {
-    case <-rf.readIndexNotifyCh:
-        return readIndex, true
-    case <-ctx.Done():
-        return -1, false
-    }
+	case <-rf.readIndexNotifyCh:
+		return readIndex, true
+	case <-ctx.Done():
+		return -1, false
+	}
 }
 func (rf *Raft) GetState() (int64, bool) {
 	rf.mu.Lock()
@@ -112,7 +112,7 @@ func (rf *Raft) GetRaftStateSize() int64 {
 	return rf.store.RaftStateSize()
 }
 func (rf *Raft) persist() {
-	tool.Log.Info("调用Save in persist")
+	// tool.Log.Info("调用Save in persist")
 	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
 	// rf.store.Log.AppendLog(rf.log)
 }
@@ -140,7 +140,7 @@ func (rf *Raft) readPersist(data []byte) {
 	logs, okLog := rf.store.Log.LoadLogs()
 	if okLog {
 		dummy := &pb.LogEntry{Term: rf.lastIncludedTerm, Command: nil}
-        rf.log = append([]*pb.LogEntry{dummy}, logs...)
+		rf.log = append([]*pb.LogEntry{dummy}, logs...)
 	} else {
 		rf.log = []*pb.LogEntry{{Term: 0, Command: nil}}
 	}
@@ -201,10 +201,16 @@ func (rf *Raft) Propose(command proto.Message) (int64, int64, bool) {
 	if rf.state != Leader || rf.killed() {
 		return index, term, false
 	}
-	cmdBytes, err := proto.Marshal(command)
-	if err != nil {
-		tool.Log.Error("Propose marshal error", "err", err)
-		return -1, -1, false
+	var cmdBytes []byte
+	var err error
+	if command != nil {
+		cmdBytes, err = proto.Marshal(command)
+		if err != nil {
+			tool.Log.Error("Propose marshal error", "err", err)
+			return -1, -1, false
+		}
+	} else {
+		cmdBytes = []byte{}
 	}
 	index = rf.getLastLogIndex() + 1
 	term = rf.currentTerm
@@ -214,7 +220,7 @@ func (rf *Raft) Propose(command proto.Message) (int64, int64, bool) {
 	}
 	rf.log = append(rf.log, log)
 	rf.store.Log.AppendLog([]*pb.LogEntry{log})
-	tool.Log.Info("no调用persist in start() ")
+	// tool.Log.Info("no调用persist in start() ")
 	rf.persist()
 	// 立马发送心跳
 	rf.sendHeartbeatAtOnce()
@@ -434,7 +440,7 @@ func StableHeartbeatTimeout() time.Duration {
 }
 func (rf *Raft) AddNode(id int64, addr string) {
 	isNew := rf.peers.AddPeer(id, addr)
-	
+
 	// 2. 共识层状态初始化 (Raft 自己的逻辑)
 	if isNew && rf.state == Leader {
 		rf.mu.Lock()
