@@ -1,4 +1,4 @@
-package skiplist
+package skl
 
 import (
 	"bytes"
@@ -116,7 +116,6 @@ func (sl *SkipList) Get(key []byte) *Entry {
 	return nil
 }
 func (sl *SkipList) Scan(callback func(e *Entry) bool) {
-	// 第 0 层包含所有节点，直接遍历第 0 层即可
 	node := sl.header.next[0].Load()
 	for node != nil {
 		if !callback(node.entry) {
@@ -124,4 +123,7 @@ func (sl *SkipList) Scan(callback func(e *Entry) bool) {
 		}
 		node = node.next[0].Load()
 	}
+}
+func (sl *SkipList) SklSize()int{
+	return int(sl.length.Load())
 }

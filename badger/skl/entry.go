@@ -1,16 +1,9 @@
-package skiplist
+package skl
 
 import (
 	"encoding/binary"
-	"unsafe"
 )
 
-type valuePointer struct {
-	Fid    uint32
-	Len    uint32
-	Offset uint32
-}
-const vptrSize = unsafe.Sizeof(valuePointer{})
 type Entry struct {
 	Key       []byte
 	Value     []byte
@@ -25,8 +18,10 @@ type EntryHeader struct {
 const (
 	MaxBatchSize = 1 << 20
 	EntryHeaderSize = 21
+	BitDelete                 byte = 1 << 0 // Set if the key has been deleted.
+	BitValuePointer           byte = 1 << 1 // Set if the value is NOT stored directly next to key.
 )
-
+const maxHeaderSize = 1 + binary.MaxVarintLen32*2
 func (h EntryHeader)Encode(out []byte) int{
 	out[0] = h.Meta
 	index := 1
@@ -38,13 +33,33 @@ func (h *EntryHeader)Decode(buf []byte) int{
 	h.Meta = buf[0]
 	index := 1
 	klen,count := binary.Uvarint(buf[index:])
-	if count <= 0 { return 0 } // 错误处理
+	if count <= 0 { return 0 } 
 	h.KeyLen = uint32(klen)
 	index += count
 	vlen,count := binary.Uvarint(buf[index:])
-	if count <= 0 { return 0 } // 错误处理
+	if count <= 0 { return 0 } 
 	h.ValueLen = uint32(vlen)
 	return index + count
+}
+func DecodeHeader(buf []byte) (*EntryHeader, int) {
+    if len(buf) == 0 {
+        return nil, 0
+    }
+    h := &EntryHeader{}
+    h.Meta = buf[0]
+    index := 1
+    
+    klen, count := binary.Uvarint(buf[index:])
+    if count <= 0 { return nil, 0 }
+    h.KeyLen = uint32(klen)
+    index += count
+    
+    vlen, count := binary.Uvarint(buf[index:])
+    if count <= 0 { return nil, 0 }
+    h.ValueLen = uint32(vlen)
+    index += count
+    
+    return h, index
 }
 func NewEntry(key, value []byte) *Entry {
 	return &Entry{

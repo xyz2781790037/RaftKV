@@ -1,7 +1,7 @@
 package badger
 
 import (
-	skl "RaftKV/badger/skiplist"
+	"RaftKV/badger/skl"
 	"bufio"
 	"encoding/binary"
 	"errors"
@@ -12,7 +12,7 @@ import (
 	"sync"
 )
 
-const maxHeaderSize = 21
+const maxHeaderSize = 11
 
 var ErrCrcMismatch = errors.New("wal: crc mismatch")
 
@@ -129,7 +129,7 @@ func (w *WAL) readEntry(r *bufio.Reader) (*skl.Entry, int64, error) {
 	if _, err := io.ReadFull(r, crcBuf[:]); err != nil {
 		return nil, 0, err
 	}
-	
+
 	expectedCRC := binary.BigEndian.Uint32(crcBuf[:])
 	crc := crc32.Update(0, crc32.MakeTable(crc32.Castagnoli), headerBuf[:n])
 	crc = crc32.Update(crc, crc32.MakeTable(crc32.Castagnoli), e.Key)
@@ -150,7 +150,7 @@ func (w *WAL) WriteBatch(entries []*skl.Entry) error {
 		keyLen := len(e.Key)
 		valLen := len(e.Value)
 		buf := make([]byte, maxHeaderSize+keyLen+valLen+4)
-		
+
 		buf[0] = e.Meta
 		idx := 1
 		idx += binary.PutUvarint(buf[idx:], uint64(keyLen))
@@ -159,14 +159,14 @@ func (w *WAL) WriteBatch(entries []*skl.Entry) error {
 		idx += keyLen
 		copy(buf[idx:], e.Value)
 		idx += valLen
-		
+
 		crc := crc32.Checksum(buf[:idx], crc32.MakeTable(crc32.Castagnoli))
 		binary.BigEndian.PutUint32(buf[idx:], crc)
 		idx += 4
-		
+
 		batchBuf = append(batchBuf, buf[:idx]...)
 	}
-	
+
 	n, err := w.f.Write(batchBuf)
 	if err != nil {
 		return err
@@ -194,8 +194,9 @@ func (w *WAL) Sync() error {
 }
 
 // Close 关闭文件
-func (w *WAL) Close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.f.Close()
-}
+
+	func (w *WAL) Close() error {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.f.Close()
+	}
