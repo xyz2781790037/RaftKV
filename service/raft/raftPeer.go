@@ -174,7 +174,7 @@ func (pm *PeerManager) ListIDs() []int64 {
 	defer pm.mu.RUnlock()
 	// 0个有效数据会优先使用这些数据
 	ids := make([]int64, 0, len(pm.peers))
-	for id,_ := range pm.peers{
+	for id := range pm.peers{
 		ids = append(ids, id)
 	}
 	return ids
