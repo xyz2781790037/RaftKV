@@ -22,7 +22,6 @@ const (
 	Follower
 	Candidate
 )
-
 type Raft struct {
 	mu    sync.Mutex     // Lock to protect shared access to this peer's state
 	peers *PeerManager   // RPC end point64s of all peers
@@ -49,11 +48,16 @@ type Raft struct {
 	heartbeatCh           chan struct{} // 心跳定时器超时通知通道
 	shutdownCh            chan struct{} // 当节点被杀死时，关闭所有通道
 	readIndexNotifyCh     chan struct{} //读取数据的通道
+	flushNotifyCh         chan struct{}
 	applyCh               chan raftapi.ApplyMsg
 	applyCond             *sync.Cond // 用于通知 ApplyMsg 的条件变量
 	// for 3D
-	lastIncludedIndex int64 // 快照的最后一个日志条目索引 // 所有以rf.log为基础的索引都要减去这个值
-	lastIncludedTerm  int64 // 快照的最后一个日志条目任期
+	lastIncludedIndex 	  int64 // 快照的最后一个日志条目索引 // 所有以rf.log为基础的索引都要减去这个值
+	lastIncludedTerm      int64 // 快照的最后一个日志条目任期
+	batchLogs             []*pb.LogEntry
+	flushCancel           context.CancelFunc
+	writeMetrics 		  int64
+	lastResetElectionTime time.Time
 }
 
 func (rf *Raft) getLogTerm(index int64) int64 {
@@ -85,12 +89,13 @@ func (rf *Raft) ReadIndex() (int64, bool) {
 		return -1, false
 	}
 	readIndex := rf.commitIndex
+	notifyCh := rf.readIndexNotifyCh
 	rf.sendHeartbeatAtOnce()
 	rf.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	select {
-	case <-rf.readIndexNotifyCh:
+	case <-notifyCh:
 		return readIndex, true
 	case <-ctx.Done():
 		return -1, false
@@ -148,12 +153,9 @@ func (rf *Raft) readPersist(data []byte) {
 
 func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
-	if rf.killed() {
-		return
-	}
-	if index <= rf.lastIncludedIndex {
+	if rf.killed() || index <= rf.lastIncludedIndex {
+		rf.mu.Unlock()
 		return
 	}
 	sliceIndex := index - rf.lastIncludedIndex
@@ -162,11 +164,11 @@ func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 		lastIncludedTerm = rf.log[sliceIndex].Term
 	} else {
 		if index > rf.getLastLogIndex() {
+			rf.mu.Unlock()
 			return
 		}
 		lastIncludedTerm = rf.lastIncludedTerm
 	}
-
 	if sliceIndex < int64(len(rf.log)) {
 		newLog := make([]*pb.LogEntry, len(rf.log[sliceIndex:]))
 		copy(newLog, rf.log[sliceIndex:])
@@ -183,10 +185,21 @@ func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 	if index > rf.lastApplied {
 		rf.lastApplied = index
 	}
-	rf.store.Log.SaveSnapshot(rf.lastIncludedTerm, rf.lastIncludedIndex, snapshot)
+	persistTerm := rf.currentTerm
+	persistVote := rf.votedFor
+	persistLastIncludedIndex := rf.lastIncludedIndex
+	persistLastIncludedTerm := rf.lastIncludedTerm
+	rf.mu.Unlock()
+
+	rf.store.Log.SaveSnapshot(persistLastIncludedTerm, persistLastIncludedIndex, snapshot)
+	rf.store.State.SaveState(persistTerm, persistVote)
+	tool.Log.Info("调用Save in snapshot (Async IO)")
+	rf.mu.Lock()
+	defer rf.mu.Unlock() // 确保退出时解
+	
 	rf.store.Log.RewriteLogs(rf.log)
-	tool.Log.Info("调用Save in snapshot")
-	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
+
+	// 6. 收尾工作
 	if rf.state == Leader {
 		rf.sendHeartbeatAtOnce()
 	}
@@ -219,117 +232,46 @@ func (rf *Raft) Propose(command proto.Message) (int64, int64, bool) {
 		Command: cmdBytes,
 	}
 	rf.log = append(rf.log, log)
-	rf.store.Log.AppendLog([]*pb.LogEntry{log})
+	rf.batchLogs = append(rf.batchLogs, log)
+	const BatchThreshold = 200 
+    
+    if len(rf.batchLogs) >= BatchThreshold {
+        select {
+        case rf.flushNotifyCh <- struct{}{}:
+        default:
+            // 如果通道满了，说明已经有人通知了，不用阻塞
+        }
+    }
 	// tool.Log.Info("no调用persist in start() ")
-	rf.persist()
 	// 立马发送心跳
 	rf.sendHeartbeatAtOnce()
 	return index, term, true
 }
+func (rf *Raft) doFlush() {
+	rf.mu.Lock()
+	batchLen := len(rf.batchLogs)
+	if len(rf.batchLogs) == 0 {
+		rf.mu.Unlock()
+		return
+	}
+	pending := rf.batchLogs
+	rf.batchLogs = make([]*pb.LogEntry, 0)
+	rf.mu.Unlock()
+
+	rf.store.Log.AppendLog(pending)
+	atomic.AddInt64(&rf.writeMetrics, int64(batchLen))
+}
 func (rf *Raft) Shutdown() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// 关闭所有计时器
 	close(rf.shutdownCh)
+	if rf.flushCancel != nil {
+		rf.flushCancel()
+	}
 }
 
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
-}
-func (rf *Raft) ticker() {
-	for !rf.killed() {
-		select {
-		case <-rf.electionCh:
-			rf.mu.Lock()
-			isLeader := rf.state == Leader
-			rf.mu.Unlock()
-			if !isLeader {
-				tool.Log.Info("Start to a new elecion", "id", rf.me)
-				go rf.sendRequestVote()
-			}
-		case <-rf.heartbeatCh:
-			rf.mu.Lock()
-			isLeader := rf.state == Leader
-			rf.mu.Unlock()
-			if isLeader {
-				go rf.sendAppendEntries()
-			}
-		case <-rf.shutdownCh:
-			return
-		}
-	}
-}
-
-func (rf *Raft) electionTimer() {
-	timer := time.NewTimer(RandomElectionTimeout())
-	defer timer.Stop()
-
-	for !rf.killed() {
-		select {
-		case <-timer.C:
-			rf.mu.Lock()
-			isLeader := rf.state == Leader
-			rf.mu.Unlock()
-			if !isLeader {
-				select {
-				case rf.electionCh <- struct{}{}:
-				default:
-				}
-			}
-			timer.Reset(RandomElectionTimeout())
-		case <-rf.resetElectionTimerCh:
-			if !timer.Stop() {
-				<-timer.C
-			}
-			timer.Reset(RandomElectionTimeout())
-		case <-rf.shutdownCh:
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return
-		}
-	}
-}
-func (rf *Raft) heartbeatTimer() {
-	timer := time.NewTimer(StableHeartbeatTimeout())
-	defer timer.Stop()
-	for !rf.killed() {
-		select {
-		case <-timer.C:
-			rf.mu.Lock()
-			isLeader := rf.state == Leader
-			rf.mu.Unlock()
-			if isLeader {
-				select {
-				case rf.heartbeatCh <- struct{}{}:
-				default:
-				}
-			}
-			timer.Reset(StableHeartbeatTimeout())
-		case <-rf.sendHeartbeatAtOnceCh:
-			if !timer.Stop() {
-				<-timer.C
-			}
-			timer.Reset(0)
-		case <-rf.shutdownCh:
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return
-		}
-	}
-}
-func (rf *Raft) resetElectionTimer() {
-	select {
-	case rf.resetElectionTimerCh <- struct{}{}:
-	default:
-	}
-}
-func (rf *Raft) sendHeartbeatAtOnce() {
-	select {
-	case rf.sendHeartbeatAtOnceCh <- struct{}{}:
-	default:
-	}
 }
 
 func Make(peers *PeerManager, me int64,
@@ -357,83 +299,30 @@ func Make(peers *PeerManager, me int64,
 	rf.electionCh = make(chan struct{}, 1)
 	rf.heartbeatCh = make(chan struct{}, 1)
 	rf.shutdownCh = make(chan struct{}, 1)
-	rf.readIndexNotifyCh = make(chan struct{}, 100)
+	rf.flushNotifyCh = make(chan struct{}, 1)
+	rf.readIndexNotifyCh = make(chan struct{})
 	rf.readPersist(nil)
+	rf.batchLogs = make([]*pb.LogEntry, 0)
+	rf.lastResetElectionTime = time.Now()
 
 	rf.commitIndex = max(rf.commitIndex, rf.lastIncludedIndex)
 	rf.lastApplied = max(rf.lastApplied, rf.lastIncludedIndex)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	rf.flushCancel = cancel
 	go rf.applier()
 	go rf.electionTimer()
 	go rf.heartbeatTimer()
 	go rf.ticker()
+	go rf.flushLoop(ctx)
+	go rf.monitorLoop()
 	return rf
-}
-func (rf *Raft) applier() {
-	for !rf.killed() {
-		rf.mu.Lock()
-		for rf.commitIndex <= rf.lastApplied && rf.lastIncludedIndex <= rf.lastApplied {
-			rf.applyCond.Wait()
-		}
-		if rf.killed() {
-			rf.mu.Unlock()
-			return
-		}
-		if rf.lastApplied < rf.lastIncludedIndex {
-			_, snapshotData, ok := rf.store.Log.LoadSnapshot()
-			if !ok {
-				tool.Log.Error("Failed to load snapshot in applier")
-				snapshotData = nil
-			}
-			snapshotMsg := raftapi.ApplyMsg{
-				CommandValid:  false,
-				SnapshotValid: true,
-				Snapshot:      snapshotData,
-				SnapshotTerm:  rf.lastIncludedTerm,
-				SnapshotIndex: rf.lastIncludedIndex,
-			}
-			rf.lastApplied = rf.lastIncludedIndex
-
-			rf.mu.Unlock()
-			rf.applyCh <- snapshotMsg
-			continue
-		}
-		if rf.lastApplied < rf.commitIndex {
-			startIndex := rf.lastApplied + 1
-			endIndex := rf.commitIndex
-			count := endIndex - startIndex + 1
-			applyMsgs := make([]raftapi.ApplyMsg, count)
-			var i int64 = 0
-			for ; i < count; i++ {
-				logIndex := startIndex + i
-				sliceIndex := logIndex - rf.lastIncludedIndex
-				if sliceIndex < 0 || sliceIndex > int64(len(rf.log)) {
-					tool.Log.Error("Applier index out of bound", "index", sliceIndex, "log", int64(len(rf.log)))
-					break
-				}
-				applyMsgs[i] = raftapi.ApplyMsg{
-					CommandValid:  true,
-					Command:       rf.log[sliceIndex].Command,
-					CommandIndex:  logIndex,
-					SnapshotValid: false,
-				}
-			}
-			// 乐观更新 lastApplied
-			rf.lastApplied = endIndex
-			rf.mu.Unlock()
-
-			for _, msg := range applyMsgs {
-				rf.applyCh <- msg
-			}
-			continue
-		}
-		rf.mu.Unlock()
-	}
 }
 
 const HeartbeatTimeout = 100
 
 func RandomElectionTimeout() time.Duration {
-	return time.Duration(600+rand.Intn(400)) * time.Millisecond
+	return time.Duration(1600+rand.Intn(1400)) * time.Millisecond
 }
 func StableHeartbeatTimeout() time.Duration {
 	return time.Duration(HeartbeatTimeout) * time.Millisecond
@@ -450,7 +339,6 @@ func (rf *Raft) AddNode(id int64, addr string) {
 		rf.matchIndex[id] = 0
 	}
 }
-
 // 封装业务层的 RemoveServer
 func (rf *Raft) RemoveNode(id int64) {
 	// 1. 网络层移除

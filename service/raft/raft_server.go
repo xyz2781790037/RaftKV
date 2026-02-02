@@ -5,6 +5,7 @@ import (
 	"RaftKV/service/raftapi"
 	"RaftKV/tool"
 	"context"
+	"time"
 )
 
 func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.RequestVoteReply, error) {
@@ -20,6 +21,16 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 	}
 	if rf.killed() {
 		tool.Log.Warn("exit RequestVote 2", "me", rf.me, "candidate", args.CandidateId)
+		return reply, nil
+	}
+	const MinElectionTimeout = 500 * time.Millisecond 
+
+	if time.Since(rf.lastResetElectionTime) < MinElectionTimeout {
+		
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		tool.Log.Warn("拒绝捣乱的 RequestVote", "candidate", args.CandidateId, "my_term", rf.currentTerm, "args_term", args.Term)
+		
 		return reply, nil
 	}
 	persistNeeded := false
@@ -62,7 +73,6 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 
 func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (*pb.AppendEntriesReply, error) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
 	reply := &pb.AppendEntriesReply{}
 
@@ -80,6 +90,7 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		rf.becomeFollower(args.Term)
 		persistNeeded = true
 	}
+	rf.lastResetElectionTime = time.Now()
 	rf.resetElectionTimer()
 	lastLogIndex := rf.getLastLogIndex()
 	if args.PrevLogIndex > lastLogIndex || args.PrevLogIndex < rf.lastIncludedIndex {
@@ -122,8 +133,9 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 			// rf.log = append(rf.log, args.Entries[newEntriesStartIndex:]...)
 			newEntries := args.Entries[newEntriesStartIndex:] // 1. 獲取新日誌切片
 			rf.log = append(rf.log, newEntries...)            // 2. 更新內存
-
+			rf.mu.Unlock()
 			rf.store.Log.AppendLog(newEntries)
+			rf.mu.Lock()
 			persistNeeded = true
 			break
 		}
@@ -134,7 +146,9 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 			sliceIndex := int(logInsertIndex - rf.lastIncludedIndex)
 			rf.log = rf.log[:sliceIndex]
 			rf.log = append(rf.log, args.Entries[newEntriesStartIndex:]...)
+			rf.mu.Unlock()
 			rf.store.Log.AppendLog(args.Entries[newEntriesStartIndex:])
+			rf.mu.Lock()
 			persistNeeded = true
 			break
 		}
@@ -158,6 +172,7 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 	}
 
 	reply.Success = true
+	rf.mu.Unlock()
 	return reply, nil
 }
 
@@ -174,6 +189,7 @@ func (rf *Raft) InstallSnapshot(ctx context.Context, args *pb.InstallSnapshotArg
 		rf.mu.Unlock()
 		return reply, nil
 	}
+	rf.lastResetElectionTime = time.Now()
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.becomeFollower(args.Term)

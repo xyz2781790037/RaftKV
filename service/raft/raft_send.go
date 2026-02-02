@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-const MaxLogEntriesPerRPC = 500
+const MaxLogEntriesPerRPC = 2000
 
 func (rf *Raft) sendRequestVote() {
 	rf.mu.Lock()
@@ -67,6 +67,7 @@ func (rf *Raft) sendAppendEntries() {
 	rf.mu.Unlock()
 	heartbeatAckCount := 1
 	peers := rf.peers.CloneList()
+	notified := false
 	for _, peer := range peers {
 		if peer.id == rf.me {
 			continue
@@ -123,11 +124,10 @@ func (rf *Raft) sendAppendEntries() {
 				rf.updateCommitIndex()
 				if len(entries) == 0 {
 					heartbeatAckCount++
-					if heartbeatAckCount == rf.peers.QuorumSize() {
-						select {
-						case rf.readIndexNotifyCh <- struct{}{}:
-						default:
-						}
+					if heartbeatAckCount == rf.peers.QuorumSize() && !notified {
+						notified = true
+						close(rf.readIndexNotifyCh)
+						rf.readIndexNotifyCh = make(chan struct{})
 					}
 				}
 			} else {
