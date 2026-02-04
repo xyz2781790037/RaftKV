@@ -1,6 +1,7 @@
 package badger
 
 import (
+	"RaftKV/badger/filter"
 	"RaftKV/badger/skl"
 	"bytes"
 	"encoding/binary"
@@ -15,6 +16,7 @@ type Table struct {
     fd           *os.File
     fileSize     int64
     blockIndices []*BlockMeta // 内存中的稀疏索引
+	filter *filter.BloomFilter
 }
 
 // OpenTable 打开一个 SSTable 文件并加载索引
@@ -29,9 +31,9 @@ func OpenTable(filename string) (*Table, error) {
         return nil, err
     }
     fileSize := stat.Size()
-    if fileSize < 8 {
-        return nil, fmt.Errorf("file too small")
-    }
+    if fileSize < 24 {
+		return nil, fmt.Errorf("file too small")
+	}
 
     t := &Table{
         fd:       file,

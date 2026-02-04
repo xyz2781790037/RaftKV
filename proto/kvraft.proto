@@ -41,8 +41,18 @@ message Op {
     int64 ClientId = 4;
     int64 SeqId = 5;
 }
+message BatchGetArgs {
+    repeated string Keys = 1;  // 一次查多个 Key
+    int64 ClientId = 2;
+    int64 SeqId = 3;
+}
 
+message BatchGetReply {
+    map<string, string> Values = 1;  // Key -> Value 映射
+    Error Err = 2;
+}
 service RaftKV {
     rpc Get(GetArgs) returns (GetReply);
     rpc PutAppend(PutAppendArgs) returns (PutAppendReply);
+    rpc BatchGet(BatchGetArgs) returns (BatchGetReply);
 }

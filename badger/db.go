@@ -2,14 +2,12 @@ package badger
 
 import (
 	"RaftKV/badger/skl"
+	"RaftKV/tool"
 	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -27,21 +25,29 @@ var (
 )
 
 type DB struct {
-	mu  sync.RWMutex
-	skl *skl.SkipList
+	mu     sync.RWMutex
+	skl    *skl.SkipList
 	immSkl *skl.SkipList
 
-	wal        *WAL
-	vlog       *ValueLog
-	tables     []*Table
-	isClosed   atomic.Uint32
+	wal      *WAL
+	vlog     *ValueLog
+	tables   []*Table
+	isClosed atomic.Uint32
 	nextFileID atomic.Uint32
+	manifest *Manifest
 }
 
 func Open(dir string) (*DB, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
+	manifest, err := OpenManifest(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	nextFid, tableFids := manifest.GetState()
+
 	walPath := filepath.Join(dir, "minibadger.wal")
 	wal, err := OpenWAL(walPath)
 	if err != nil {
@@ -54,37 +60,32 @@ func Open(dir string) (*DB, error) {
 	}
 
 	var tables []*Table
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	var sstFiles []string
-	var maxFileID uint64 = 0
-
-	for _, file := range files {
-		if filepath.Ext(file.Name()) == ".sst" {
-			filename := file.Name()
-			idStr := strings.TrimSuffix(filename, ".sst")
-			id, _ := strconv.ParseUint(idStr, 10, 32)
-			if id > maxFileID {
-				maxFileID = id
-			}
-			sstFiles = append(sstFiles, filepath.Join(dir, filename))
-		}
-	}
-
-	sort.Strings(sstFiles)
-
-	for _, sstPath := range sstFiles {
+	for _, fid := range tableFids {
+		sstName := fmt.Sprintf("%06d.sst", fid)
+		sstPath := filepath.Join(dir, sstName)
 		t, err := OpenTable(sstPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open sst %s: %v", sstPath, err)
+			// 如果清单上有，但文件没了或坏了，这是严重错误
+			return nil, fmt.Errorf("missing sst %s listed in manifest: %v", sstName, err)
 		}
-		tables = append([]*Table{t}, tables...)
+		tables = append(tables, t)
 	}
-
 	sl := skl.NewSkiplist()
+	bakPath := filepath.Join(dir, "minibadger.wal.bak")
+	if _, err := os.Stat(bakPath); err == nil {
+		tool.Log.Info("Found .bak WAL, recovering data...", "path", bakPath)
+		bakWal, err := OpenWAL(bakPath)
+		if err == nil {
+			entries, err := bakWal.ReadWAL()
+			if err == nil {
+				for _, e := range entries {
+					sl.Put(e)
+				}
+			}
+			bakWal.Close()
+			// 恢复后不做删除，留给下次 Flush 处理，或者你可以选择现在 os.Remove(bakPath)
+		}
+	}
 	entries, err := wal.ReadWAL()
 	if err != nil {
 		return nil, err
@@ -99,14 +100,9 @@ func Open(dir string) (*DB, error) {
 		wal:    wal,
 		vlog:   vlog,
 		tables: tables,
+		manifest: manifest,
 	}
-
-	if len(sstFiles) > 0 {
-		db.nextFileID.Store(uint32(maxFileID) + 1)
-	} else {
-		db.nextFileID.Store(0)
-	}
-
+	db.nextFileID.Store(nextFid)
 	return db, nil
 }
 
@@ -145,11 +141,13 @@ func (db *DB) BatchSet(entries []*skl.Entry) error {
 	defer db.mu.Unlock()
 
 	if err := db.wal.WriteBatch(entries); err != nil {
+		tool.Log.Debug("BatchSet fail")
 		return err
 	}
 	for _, e := range entries {
 		db.skl.Put(e)
 	}
+	tool.Log.Debug("📝 BatchSet 完成", "Count", len(entries), "CurrentSklSize", db.skl.SklSize())
 	return nil
 }
 
@@ -162,21 +160,19 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	db.mu.RLock()
+	defer db.mu.RUnlock()
 	if e := db.skl.Get(key); e != nil {
 		val, err := db.valueStructToBytes(e.Value, e.Meta)
-		db.mu.RUnlock()
 		return val, err
 	}
 
 	if db.immSkl != nil {
 		if e := db.immSkl.Get(key); e != nil {
 			val, err := db.valueStructToBytes(e.Value, e.Meta)
-			db.mu.RUnlock()
 			return val, err
 		}
 	}
 	currentTables := db.tables
-	db.mu.RUnlock()
 
 	for _, table := range currentTables {
 		val, meta, err := table.Get(key)
@@ -276,7 +272,9 @@ func (db *DB) LoadFrom(data []byte) error {
 	}
 	db.tables = nil
 	db.nextFileID.Store(0)
-
+	if err := db.manifest.RevertToSnapshot(); err != nil {
+		return err
+	}
 	db.wal.Close()
 	os.Truncate(db.wal.path, 0)
 	newWal, err := OpenWAL(db.wal.path)
@@ -333,33 +331,146 @@ func (db *DB) LoadFrom(data []byte) error {
 	return nil
 }
 
+// func (db *DB) Flush() error {
+// 	db.mu.Lock()
+// 	if db.skl.SklSize() == 0 {
+// 		db.mu.Unlock()
+// 		return nil
+// 	}
+
+// 	if db.immSkl != nil {
+// 		db.mu.Unlock()
+// 		return fmt.Errorf("flush already in progress")
+// 	}
+
+// 	db.immSkl = db.skl
+// 	db.skl = skl.NewSkiplist()
+
+// 	fid := db.nextFileID.Add(1) - 1
+// 	db.mu.Unlock()
+
+// 	sstName := filepath.Join(db.vlog.dirPath, fmt.Sprintf("%06d.sst", fid))
+// 	builder, err := NewBuilder(sstName)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	db.immSkl.Scan(func(e *skl.Entry) bool {
+// 		builder.Add(e.Key, e.Value, e.Meta)
+// 		return true
+// 	})
+
+// 	if err := builder.Finish(); err != nil {
+// 		return err
+// 	}
+
+// 	t, err := OpenTable(sstName)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	db.mu.Lock()
+// 	defer db.mu.Unlock()
+
+// 	db.tables = append([]*Table{t}, db.tables...)
+// 	db.immSkl = nil
+
+// 	if err := db.wal.Close(); err != nil {
+// 		return err
+// 	}
+// 	if err := os.Truncate(db.wal.path, 0); err != nil {
+// 		return err
+// 	}
+// 	newWal, err := OpenWAL(db.wal.path)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	db.wal = newWal
+
+//		return nil
+//	}
 func (db *DB) Flush() error {
+
 	db.mu.Lock()
+
 	if db.skl.SklSize() == 0 {
+
 		db.mu.Unlock()
+
 		return nil
+
 	}
 
 	if db.immSkl != nil {
+
 		db.mu.Unlock()
+
 		return fmt.Errorf("flush already in progress")
+
 	}
 
+	if err := db.wal.Close(); err != nil {
+
+		db.mu.Unlock()
+
+		return err
+
+	}
+
+	// 2. 将旧 WAL 重命名为临时文件 (这部分数据属于即将刷盘的 immSkl)
+
+	walPath := db.wal.path
+
+	bakPath := walPath + ".bak"
+
+	if err := os.Rename(walPath, bakPath); err != nil {
+
+		db.mu.Unlock()
+
+		return err
+
+	}
+
+	// 3. 创建一个新的空 WAL 文件 (给后续新进来的 db.skl 使用)
+
+	newWal, err := OpenWAL(walPath)
+
+	if err != nil {
+
+		db.mu.Unlock()
+
+		os.Rename(bakPath, walPath) // 失败回滚
+
+		return err
+
+	}
+
+	db.wal = newWal // 切换到新 WAL
+
+	// 4. 切换内存表
+
 	db.immSkl = db.skl
+
 	db.skl = skl.NewSkiplist()
 
-	fid := db.nextFileID.Add(1) - 1
-	db.mu.Unlock()
+	fid, _ := db.manifest.GetState()
+
+	db.mu.Unlock() 
 
 	sstName := filepath.Join(db.vlog.dirPath, fmt.Sprintf("%06d.sst", fid))
+
 	builder, err := NewBuilder(sstName)
+
 	if err != nil {
 		return err
 	}
 
 	db.immSkl.Scan(func(e *skl.Entry) bool {
+
 		builder.Add(e.Key, e.Value, e.Meta)
+
 		return true
+
 	})
 
 	if err := builder.Finish(); err != nil {
@@ -367,31 +478,33 @@ func (db *DB) Flush() error {
 	}
 
 	t, err := OpenTable(sstName)
+
 	if err != nil {
 		return err
 	}
 
+	if err := db.manifest.AddTableEntry(uint32(fid), uint32(fid)+1); err != nil {
+		t.Close()
+		return fmt.Errorf("failed to update manifest: %v", err)
+	}
 	db.mu.Lock()
+
 	defer db.mu.Unlock()
 
 	db.tables = append([]*Table{t}, db.tables...)
+
 	db.immSkl = nil
 
-	if err := db.wal.Close(); err != nil {
-		return err
-	}
-	if err := os.Truncate(db.wal.path, 0); err != nil {
-		return err
-	}
-	newWal, err := OpenWAL(db.wal.path)
-	if err != nil {
-		return err
-	}
-	db.wal = newWal
+	// 5. 数据已进 SST，安全删除备份 WAL
+
+	os.Remove(bakPath)
 
 	return nil
+
 }
-const MemTableEntryLimit = 64 * 1024 * 1024
+
+const MemTableEntryLimit = 80000
+
 func (db *DB) NeedFlush() bool {
 	return db.skl.SklSize() > MemTableEntryLimit
 }

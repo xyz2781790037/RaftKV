@@ -384,6 +384,118 @@ func (x *Op) GetSeqId() int64 {
 	return 0
 }
 
+type BatchGetArgs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Keys          []string               `protobuf:"bytes,1,rep,name=Keys,proto3" json:"Keys,omitempty"` // 一次查多个 Key
+	ClientId      int64                  `protobuf:"varint,2,opt,name=ClientId,proto3" json:"ClientId,omitempty"`
+	SeqId         int64                  `protobuf:"varint,3,opt,name=SeqId,proto3" json:"SeqId,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetArgs) Reset() {
+	*x = BatchGetArgs{}
+	mi := &file_kvraft_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetArgs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetArgs) ProtoMessage() {}
+
+func (x *BatchGetArgs) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetArgs.ProtoReflect.Descriptor instead.
+func (*BatchGetArgs) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *BatchGetArgs) GetKeys() []string {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *BatchGetArgs) GetClientId() int64 {
+	if x != nil {
+		return x.ClientId
+	}
+	return 0
+}
+
+func (x *BatchGetArgs) GetSeqId() int64 {
+	if x != nil {
+		return x.SeqId
+	}
+	return 0
+}
+
+type BatchGetReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Values        map[string]string      `protobuf:"bytes,1,rep,name=Values,proto3" json:"Values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Key -> Value 映射
+	Err           Error                  `protobuf:"varint,2,opt,name=Err,proto3,enum=kvraft.Error" json:"Err,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetReply) Reset() {
+	*x = BatchGetReply{}
+	mi := &file_kvraft_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetReply) ProtoMessage() {}
+
+func (x *BatchGetReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetReply.ProtoReflect.Descriptor instead.
+func (*BatchGetReply) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *BatchGetReply) GetValues() map[string]string {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *BatchGetReply) GetErr() Error {
+	if x != nil {
+		return x.Err
+	}
+	return Error_ERR_UNKNOWN
+}
+
 var File_kvraft_proto protoreflect.FileDescriptor
 
 const file_kvraft_proto_rawDesc = "" +
@@ -409,17 +521,28 @@ const file_kvraft_proto_rawDesc = "" +
 	"\x03Key\x18\x02 \x01(\tR\x03Key\x12\x14\n" +
 	"\x05Value\x18\x03 \x01(\tR\x05Value\x12\x1a\n" +
 	"\bClientId\x18\x04 \x01(\x03R\bClientId\x12\x14\n" +
-	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId*W\n" +
+	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId\"T\n" +
+	"\fBatchGetArgs\x12\x12\n" +
+	"\x04Keys\x18\x01 \x03(\tR\x04Keys\x12\x1a\n" +
+	"\bClientId\x18\x02 \x01(\x03R\bClientId\x12\x14\n" +
+	"\x05SeqId\x18\x03 \x01(\x03R\x05SeqId\"\xa6\x01\n" +
+	"\rBatchGetReply\x129\n" +
+	"\x06Values\x18\x01 \x03(\v2!.kvraft.BatchGetReply.ValuesEntryR\x06Values\x12\x1f\n" +
+	"\x03Err\x18\x02 \x01(\x0e2\r.kvraft.ErrorR\x03Err\x1a9\n" +
+	"\vValuesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*W\n" +
 	"\x05Error\x12\x0f\n" +
 	"\vERR_UNKNOWN\x10\x00\x12\x06\n" +
 	"\x02OK\x10\x01\x12\x0e\n" +
 	"\n" +
 	"ERR_NO_KEY\x10\x02\x12\x14\n" +
 	"\x10ERR_WRONG_LEADER\x10\x03\x12\x0f\n" +
-	"\vERR_TIMEOUT\x10\x042n\n" +
+	"\vERR_TIMEOUT\x10\x042\xa7\x01\n" +
 	"\x06RaftKV\x12(\n" +
 	"\x03Get\x12\x0f.kvraft.GetArgs\x1a\x10.kvraft.GetReply\x12:\n" +
-	"\tPutAppend\x12\x15.kvraft.PutAppendArgs\x1a\x16.kvraft.PutAppendReplyB\bZ\x06./kvpbb\x06proto3"
+	"\tPutAppend\x12\x15.kvraft.PutAppendArgs\x1a\x16.kvraft.PutAppendReply\x127\n" +
+	"\bBatchGet\x12\x14.kvraft.BatchGetArgs\x1a\x15.kvraft.BatchGetReplyB\bZ\x06./kvpbb\x06proto3"
 
 var (
 	file_kvraft_proto_rawDescOnce sync.Once
@@ -434,7 +557,7 @@ func file_kvraft_proto_rawDescGZIP() []byte {
 }
 
 var file_kvraft_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kvraft_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_kvraft_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_kvraft_proto_goTypes = []any{
 	(Error)(0),             // 0: kvraft.Error
 	(*PutAppendArgs)(nil),  // 1: kvraft.PutAppendArgs
@@ -442,19 +565,26 @@ var file_kvraft_proto_goTypes = []any{
 	(*GetArgs)(nil),        // 3: kvraft.GetArgs
 	(*GetReply)(nil),       // 4: kvraft.GetReply
 	(*Op)(nil),             // 5: kvraft.Op
+	(*BatchGetArgs)(nil),   // 6: kvraft.BatchGetArgs
+	(*BatchGetReply)(nil),  // 7: kvraft.BatchGetReply
+	nil,                    // 8: kvraft.BatchGetReply.ValuesEntry
 }
 var file_kvraft_proto_depIdxs = []int32{
 	0, // 0: kvraft.PutAppendReply.err:type_name -> kvraft.Error
 	0, // 1: kvraft.GetReply.err:type_name -> kvraft.Error
-	3, // 2: kvraft.RaftKV.Get:input_type -> kvraft.GetArgs
-	1, // 3: kvraft.RaftKV.PutAppend:input_type -> kvraft.PutAppendArgs
-	4, // 4: kvraft.RaftKV.Get:output_type -> kvraft.GetReply
-	2, // 5: kvraft.RaftKV.PutAppend:output_type -> kvraft.PutAppendReply
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	8, // 2: kvraft.BatchGetReply.Values:type_name -> kvraft.BatchGetReply.ValuesEntry
+	0, // 3: kvraft.BatchGetReply.Err:type_name -> kvraft.Error
+	3, // 4: kvraft.RaftKV.Get:input_type -> kvraft.GetArgs
+	1, // 5: kvraft.RaftKV.PutAppend:input_type -> kvraft.PutAppendArgs
+	6, // 6: kvraft.RaftKV.BatchGet:input_type -> kvraft.BatchGetArgs
+	4, // 7: kvraft.RaftKV.Get:output_type -> kvraft.GetReply
+	2, // 8: kvraft.RaftKV.PutAppend:output_type -> kvraft.PutAppendReply
+	7, // 9: kvraft.RaftKV.BatchGet:output_type -> kvraft.BatchGetReply
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_kvraft_proto_init() }
@@ -468,7 +598,7 @@ func file_kvraft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kvraft_proto_rawDesc), len(file_kvraft_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

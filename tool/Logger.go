@@ -98,4 +98,4 @@ func NewLogger(level slog.Level) *slog.Logger {
 	return slog.New(handler)
 }
 
-var Log *slog.Logger = NewLogger(slog.LevelDebug)
+var Log *slog.Logger = NewLogger(slog.LevelInfo)

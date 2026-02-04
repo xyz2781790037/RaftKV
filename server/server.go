@@ -38,6 +38,8 @@ type Server struct {
 	Options StartOptions
 }
 
+var maxMsgSize = 1024 * 1024 * 64
+
 func ServerStart(opts StartOptions) (*Server, error) {
 	nodeDir := fmt.Sprintf("%s/node_%d", opts.DataDir, opts.NodeID)
 	if err := os.MkdirAll(nodeDir, 0755); err != nil {
@@ -50,7 +52,10 @@ func ServerStart(opts StartOptions) (*Server, error) {
 		tool.Log.Error("Listen failed", "err", err)
 		return nil, err
 	}
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.MaxRecvMsgSize(maxMsgSize),
+		grpc.MaxSendMsgSize(maxMsgSize),
+	)
 	// 注册 KV 服务 (供客户端调用)
 	kvpb.RegisterRaftKVServer(s, kv)
 	// 注册 Raft 服务 (供其他节点调用 CallAppendEntries 等)
@@ -84,20 +89,20 @@ func (s *Server) WaitForExit() {
 	sigCh := make(chan os.Signal, 1)
 	// 监听 Ctrl+C (Interrupt) 和 kill (SIGTERM)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	
+
 	// 阻塞在这里，直到收到信号
 	<-sigCh
-	
+
 	// 收到信号后，自动调用 Stop
 	s.Stop()
 }
-func ParseFlags() (StartOptions,bool) {
+func ParseFlags() (StartOptions, bool) {
 	// 定义 flag
 	nodeID := flag.Int64("id", 1, "ID of this node")
 	port := flag.String("port", ":8001", "Port to listen on")
 	peersRaw := flag.String("peers", "", "Peers list (e.g. 1=localhost:8001,2=localhost:8002)")
 	dataDir := flag.String("dir", "data", "Data directory")
-	maxState := flag.Int64("maxstate", 1000000, "Max Raft State size before snapshot")
+	maxState := flag.Int64("maxstate", 100 * 1024 * 1024, "Max Raft State size before snapshot")
 	// 解析
 	flag.Parse()
 
@@ -105,7 +110,7 @@ func ParseFlags() (StartOptions,bool) {
 	if *peersRaw == "" {
 		fmt.Println("Error: -peers argument is required")
 		flag.Usage()
-		return StartOptions{},false
+		return StartOptions{}, false
 	}
 
 	// 处理 peers 字符串转 map
@@ -121,10 +126,10 @@ func ParseFlags() (StartOptions,bool) {
 	}
 	peers := raft.NewPeerManager(peersMap, *nodeID)
 	return StartOptions{
-		NodeID:  *nodeID,
-		Port:    *port,
-		Peers:   peers,
-		DataDir: *dataDir,
+		NodeID:       *nodeID,
+		Port:         *port,
+		Peers:        peers,
+		DataDir:      *dataDir,
 		MaxRaftState: *maxState,
-	},true
+	}, true
 }

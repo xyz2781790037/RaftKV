@@ -5,6 +5,7 @@ import (
 	"RaftKV/service/raftapi"
 	"RaftKV/tool"
 	"context"
+	"time"
 )
 
 func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.RequestVoteReply, error) {
@@ -20,6 +21,16 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 	}
 	if rf.killed() {
 		tool.Log.Warn("exit RequestVote 2", "me", rf.me, "candidate", args.CandidateId)
+		return reply, nil
+	}
+	const MinElectionTimeout = 500 * time.Millisecond 
+
+	if time.Since(rf.lastResetElectionTime) < MinElectionTimeout {
+		
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		tool.Log.Warn("拒绝捣乱的 RequestVote", "candidate", args.CandidateId, "my_term", rf.currentTerm, "args_term", args.Term)
+		
 		return reply, nil
 	}
 	persistNeeded := false
@@ -80,6 +91,7 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		rf.becomeFollower(args.Term)
 		persistNeeded = true
 	}
+	rf.lastResetElectionTime = time.Now()
 	rf.resetElectionTimer()
 	lastLogIndex := rf.getLastLogIndex()
 	if args.PrevLogIndex > lastLogIndex || args.PrevLogIndex < rf.lastIncludedIndex {
@@ -174,6 +186,7 @@ func (rf *Raft) InstallSnapshot(ctx context.Context, args *pb.InstallSnapshotArg
 		rf.mu.Unlock()
 		return reply, nil
 	}
+	rf.lastResetElectionTime = time.Now()
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.becomeFollower(args.Term)

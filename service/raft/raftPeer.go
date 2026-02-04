@@ -27,7 +27,7 @@ type PeerManager struct {
 	peers map[int64]*RaftPeer
 	myID  int64 // 记录自己的 ID，方便遍历时跳过自己
 }
-
+var maxMsgSize = 1024 * 1024 * 64
 func NewRaftPeer(id int64, addr string) *RaftPeer {
 	rp := &RaftPeer{
 		id:   id,
@@ -42,7 +42,11 @@ func (rp *RaftPeer) Connect() {
 	if rp.conn != nil {
 		rp.conn.Close()
 	}
-	conn, err := grpc.NewClient(rp.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(rp.addr, grpc.WithTransportCredentials(insecure.NewCredentials()),grpc.WithDefaultCallOptions(
+            grpc.MaxCallRecvMsgSize(maxMsgSize),
+            grpc.MaxCallSendMsgSize(maxMsgSize),
+        ),
+)
 	if err != nil {
 		tool.Log.Error("Connect failed", "err", err)
 		rp.conn = nil

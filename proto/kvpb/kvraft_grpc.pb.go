@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	RaftKV_Get_FullMethodName       = "/kvraft.RaftKV/Get"
 	RaftKV_PutAppend_FullMethodName = "/kvraft.RaftKV/PutAppend"
+	RaftKV_BatchGet_FullMethodName  = "/kvraft.RaftKV/BatchGet"
 )
 
 // RaftKVClient is the client API for RaftKV service.
@@ -29,6 +30,7 @@ const (
 type RaftKVClient interface {
 	Get(ctx context.Context, in *GetArgs, opts ...grpc.CallOption) (*GetReply, error)
 	PutAppend(ctx context.Context, in *PutAppendArgs, opts ...grpc.CallOption) (*PutAppendReply, error)
+	BatchGet(ctx context.Context, in *BatchGetArgs, opts ...grpc.CallOption) (*BatchGetReply, error)
 }
 
 type raftKVClient struct {
@@ -59,12 +61,23 @@ func (c *raftKVClient) PutAppend(ctx context.Context, in *PutAppendArgs, opts ..
 	return out, nil
 }
 
+func (c *raftKVClient) BatchGet(ctx context.Context, in *BatchGetArgs, opts ...grpc.CallOption) (*BatchGetReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BatchGetReply)
+	err := c.cc.Invoke(ctx, RaftKV_BatchGet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RaftKVServer is the server API for RaftKV service.
 // All implementations must embed UnimplementedRaftKVServer
 // for forward compatibility.
 type RaftKVServer interface {
 	Get(context.Context, *GetArgs) (*GetReply, error)
 	PutAppend(context.Context, *PutAppendArgs) (*PutAppendReply, error)
+	BatchGet(context.Context, *BatchGetArgs) (*BatchGetReply, error)
 	mustEmbedUnimplementedRaftKVServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedRaftKVServer) Get(context.Context, *GetArgs) (*GetReply, erro
 }
 func (UnimplementedRaftKVServer) PutAppend(context.Context, *PutAppendArgs) (*PutAppendReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method PutAppend not implemented")
+}
+func (UnimplementedRaftKVServer) BatchGet(context.Context, *BatchGetArgs) (*BatchGetReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method BatchGet not implemented")
 }
 func (UnimplementedRaftKVServer) mustEmbedUnimplementedRaftKVServer() {}
 func (UnimplementedRaftKVServer) testEmbeddedByValue()                {}
@@ -138,6 +154,24 @@ func _RaftKV_PutAppend_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RaftKV_BatchGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BatchGetArgs)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftKVServer).BatchGet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftKV_BatchGet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftKVServer).BatchGet(ctx, req.(*BatchGetArgs))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RaftKV_ServiceDesc is the grpc.ServiceDesc for RaftKV service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var RaftKV_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PutAppend",
 			Handler:    _RaftKV_PutAppend_Handler,
+		},
+		{
+			MethodName: "BatchGet",
+			Handler:    _RaftKV_BatchGet_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -35,6 +35,7 @@ type KVServer struct {
 	dead    int32 // 原子操作，用于 Kill
 
 	maxraftstate     int64 // 快照阈值
+	lastSnapshotTime time.Time
 	lastAppliedIndex int64
 
 	// --- 状态机 (State Machine) ---
@@ -42,6 +43,7 @@ type KVServer struct {
 
 	// --- 通知机制 ---
 	notifyChs map[int64]chan OpResult
+	applyCond *sync.Cond
 }
 
 func (kv *KVServer) GetRaft() pb.RaftServer {
@@ -58,7 +60,7 @@ func (kv *KVServer) waitRaft(op *kvpb.Op) OpResult {
 	}
 
 	if kv.db.IsDuplicate(op.ClientId, op.SeqId) {
-		tool.Log.Info("请求已完成(Cache Hit)！", "op", op.Operation)
+		tool.Log.Debug("请求已完成(Cache Hit)！", "op", op.Operation)
 		kv.mu.Unlock()
 		return OpResult{Err: kvpb.Error_OK, Value: "", Term: int64(term)}
 	}
@@ -108,32 +110,67 @@ func (kv *KVServer) Get(ctx context.Context, args *kvpb.GetArgs) (*kvpb.GetReply
 		reply.Err = kvpb.Error_ERR_WRONG_LEADER
 		return reply, nil
 	}
-
-	timer := time.NewTimer(1000 * time.Millisecond)
-	defer timer.Stop()
-	for {
-		kv.mu.Lock()
-		if kv.lastAppliedIndex >= readIndex {
-			kv.mu.Unlock()
-			val, err := kv.db.Get(args.Key)
-			if err == nil {
-				reply.Value = val
-				reply.Err = kvpb.Error_OK
-			} else {
-				reply.Value = ""
-				reply.Err = kvpb.Error_ERR_NO_KEY
-			}
-
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	for kv.lastAppliedIndex < readIndex {
+		if kv.killed() {
+			reply.Err = kvpb.Error_ERR_WRONG_LEADER
 			return reply, nil
 		}
-		kv.mu.Unlock()
-		select {
-		case <-timer.C:
+
+		if ctx.Err() != nil {
 			reply.Err = kvpb.Error_ERR_TIMEOUT
 			return reply, nil
-		case <-time.After(10 * time.Millisecond):
+		}
+
+		kv.applyCond.Wait()
+	}
+	val, err := kv.db.Get(args.Key)
+	if err == nil {
+		reply.Value = val
+		reply.Err = kvpb.Error_OK
+	} else {
+		reply.Value = ""
+		reply.Err = kvpb.Error_ERR_NO_KEY
+	}
+
+	return reply, nil
+}
+func (kv *KVServer) BatchGet(ctx context.Context, args *kvpb.BatchGetArgs) (*kvpb.BatchGetReply, error) {
+	reply := &kvpb.BatchGetReply{
+		Values: make(map[string]string),
+	}
+	readIndex, isLeader := kv.rf.ReadIndex()
+	if !isLeader {
+		reply.Err = kvpb.Error_ERR_WRONG_LEADER
+		return reply, nil
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	for kv.lastAppliedIndex < readIndex {
+		if kv.killed() {
+			reply.Err = kvpb.Error_ERR_WRONG_LEADER
+			return reply, nil
+		}
+
+		if ctx.Err() != nil {
+			reply.Err = kvpb.Error_ERR_TIMEOUT
+			return reply, nil
+		}
+
+		kv.applyCond.Wait()
+	}
+	for _, key := range args.Keys {
+		val, err := kv.db.Get(key)
+		if err == nil {
+			reply.Values[key] = val
+		} else {
+			reply.Values[key] = ""
 		}
 	}
+	tool.Log.Debug("BatchGet received", "count", len(args.Keys))
+	reply.Err = kvpb.Error_OK
+	return reply, nil
 }
 func (kv *KVServer) PutAppend(ctx context.Context, args *kvpb.PutAppendArgs) (*kvpb.PutAppendReply, error) {
 	op := &kvpb.Op{
@@ -164,9 +201,10 @@ func StartKVServer(server *raft.PeerManager, me int64, persister *storage.Store,
 		mu:           sync.Mutex{},
 		me:           me,
 		maxraftstate: maxraftstate,
-		applyCh:      make(chan raftapi.ApplyMsg, 100),
+		applyCh:      make(chan raftapi.ApplyMsg, 10000),
 		notifyChs:    make(map[int64]chan OpResult),
 	}
+	kv.applyCond = sync.NewCond(&kv.mu)
 	dbPath := fmt.Sprintf("data/kv-%d", me)
 	db, err := bgdb.NewKVEngine(dbPath)
 	if err != nil {
@@ -178,7 +216,7 @@ func StartKVServer(server *raft.PeerManager, me int64, persister *storage.Store,
 	meta, snapshotData, ok := persister.Log.LoadSnapshot()
 
 	if ok && len(snapshotData) > 0 {
-		// tool.Log.Info("Found snapshot on disk", "bytes", len(snapshotData), "lastIndex", meta.LastIncludedIndex)
+		tool.Log.Debug("Found snapshot on disk", "bytes", len(snapshotData), "lastIndex", meta.LastIncludedIndex)
 		kv.Restore(snapshotData)
 
 		// 更新 lastAppliedIndex，确保 Get 能正常工作
@@ -192,79 +230,119 @@ func StartKVServer(server *raft.PeerManager, me int64, persister *storage.Store,
 	return kv
 }
 func (kv *KVServer) applier() {
-	for msg := range kv.applyCh {
+
+	var lastSnapshottedIndex int64 = 0
+	kv.lastSnapshotTime = time.Now()
+	batchOps := make([]raftapi.ApplyMsg, 0, 100)
+
+	for {
+
 		if kv.killed() {
 			return
 		}
-		kv.mu.Lock()
-		if msg.CommandValid {
-			if msg.Command == nil{
-				continue
+
+		firstMsg, ok := <-kv.applyCh
+		if !ok {
+			return
+		}
+		batchOps = append(batchOps, firstMsg)
+
+	DrainLoop:
+		for len(batchOps) < 100 {
+			select {
+			case msg, ok := <-kv.applyCh:
+				if !ok {
+					return
+				}
+				batchOps = append(batchOps, msg)
+			default:
+
+				break DrainLoop
 			}
-			op := &kvpb.Op{}
-			cmdBytes, ok := msg.Command.([]byte)
-			if ok {
-				if err := proto.Unmarshal(cmdBytes, op); err != nil {
-					tool.Log.Error("Failed to unmarshal command", "err", err)
-					kv.mu.Unlock()
+		}
+
+		kv.mu.Lock()
+
+		for _, msg := range batchOps {
+			if msg.CommandValid {
+				if msg.Command == nil {
 					continue
 				}
-			}else if cmdOp, ok := msg.Command.(*kvpb.Op); ok {
-				op = cmdOp
-			}else{
-				tool.Log.Error("Invalid command type, expected []byte")
-				kv.mu.Unlock()
-				continue
-			}
-			var result OpResult
-			result.Err = kvpb.Error_OK
 
-			currentTerm, _ := kv.rf.GetState()
-			result.Term = currentTerm
-			isDup := false
-			if op.Operation != "Get" {
-				isDup = kv.db.IsDuplicate(op.ClientId, op.SeqId)
-			}
-			if isDup {
+				op := &kvpb.Op{}
+				cmdBytes, ok := msg.Command.([]byte)
+				if ok {
+					if err := proto.Unmarshal(cmdBytes, op); err != nil {
+						tool.Log.Error("Failed to unmarshal command", "err", err)
+						continue
+					}
+				} else if cmdOp, ok := msg.Command.(*kvpb.Op); ok {
+					op = cmdOp
+				} else {
+					tool.Log.Error("Invalid command type, expected []byte")
+					continue
+				}
+
+				var result OpResult
 				result.Err = kvpb.Error_OK
-			} else {
+				currentTerm, _ := kv.rf.GetState()
+				result.Term = currentTerm
+
+				isDup := false
 				if op.Operation != "Get" {
-					err := kv.db.ApplyCommand(op.Operation, []byte(op.Key), []byte(op.Value), op.ClientId, op.SeqId)
-					if err != nil {
-						tool.Log.Error("DB Trans Failed", "err", err)
+					isDup = kv.db.IsDuplicate(op.ClientId, op.SeqId)
+				}
+
+				if isDup {
+					result.Err = kvpb.Error_OK
+					tool.Log.Debug("命中去重，跳过写入", "ClientId", op.ClientId, "SeqId", op.SeqId, "Key", op.Key)
+				} else {
+					if op.Operation != "Get" {
+						err := kv.db.ApplyCommand(op.Operation, []byte(op.Key), []byte(op.Value), op.ClientId, op.SeqId)
+						if err != nil {
+							panic(fmt.Sprintf("🔥 严重错误: 状态机应用失败! Index=%d, Err=%v", msg.CommandIndex, err))
+						}
 					}
 				}
-			}
-			kv.lastAppliedIndex = msg.CommandIndex
-			if ch, ok := kv.notifyChs[msg.CommandIndex]; ok {
-				select {
-				case ch <- result:
-				default:
-					tool.Log.Warn("❌ 通知发送失败：通道已满或无人接收", "index", msg.CommandIndex)
-				}
-				delete(kv.notifyChs, msg.CommandIndex)
-			}
-			if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize() >= kv.maxraftstate {
-				snapshotData := kv.Snapshot()
-				kv.rf.Snapshot(msg.CommandIndex, snapshotData)
-			}
-		} else if msg.SnapshotValid {
-			// tool.Log.Info("进入applier2")
-			kv.Restore(msg.Snapshot)
-			for index := range kv.notifyChs {
-				// if index <= msg.SnapshotIndex {
-				// 	select {
-				// 	case kv.notifyChs[index] <- OpResult{Err: kvpb.Error_ERR_WRONG_LEADER, Value: ""}:
-				// 	default:
-				// 	}
 
-				// }
-				delete(kv.notifyChs, index)
+				kv.lastAppliedIndex = msg.CommandIndex
+				if ch, ok := kv.notifyChs[msg.CommandIndex]; ok {
+					select {
+					case ch <- result:
+					default:
+						tool.Log.Warn("❌ 通知发送失败：通道已满或无人接收", "index", msg.CommandIndex)
+					}
+					delete(kv.notifyChs, msg.CommandIndex)
+				}
+
+			} else if msg.SnapshotValid {
+				kv.Restore(msg.Snapshot)
+
+				for index := range kv.notifyChs {
+					delete(kv.notifyChs, index)
+				}
+
+				kv.lastAppliedIndex = msg.SnapshotIndex
+				lastSnapshottedIndex = msg.SnapshotIndex
 			}
-			kv.lastAppliedIndex = msg.SnapshotIndex
-			// tool.Log.Info("Loaded snapshot", "index", msg.SnapshotIndex)
 		}
+		if kv.maxraftstate != -1 {
+			lastIndex := kv.lastAppliedIndex
+			currentSize := kv.rf.GetRaftStateSize()
+			isOverSize := currentSize >= kv.maxraftstate
+			isEnoughGap := (lastIndex - lastSnapshottedIndex) >= 5000
+			isCoolDown := time.Since(kv.lastSnapshotTime) >= 20*time.Second
+			isEmergency := currentSize >= kv.maxraftstate*2
+			if isEmergency || (isOverSize && isEnoughGap && isCoolDown) {
+				snapshotData := kv.Snapshot()
+				kv.rf.Snapshot(lastIndex, snapshotData)
+				lastSnapshottedIndex = lastIndex
+				kv.lastSnapshotTime = time.Now()
+			}
+		}
+		kv.applyCond.Broadcast()
 		kv.mu.Unlock()
+		batchOps = batchOps[:0]
 	}
 }
 func (kv *KVServer) Snapshot() []byte {
