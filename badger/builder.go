@@ -1,6 +1,7 @@
 package badger
 
 import (
+	"RaftKV/badger/filter"
 	"RaftKV/badger/skl"
 	"bytes"
 	"encoding/binary"
@@ -20,6 +21,7 @@ type Builder struct {
 
 	// 查找时：如果 target < FirstKey，说明肯定不在这个块里
 	firstKeyInBlock []byte
+	filter *filter.BloomFilter
 }
 
 // BlockMeta 索引元数据：记录 block 在文件中的位置和范围
@@ -34,10 +36,12 @@ func NewBuilder(filename string) (*Builder, error) {
 	if err != nil {
 		return nil, err
 	}
+	bf := filter.NewBloomFilter(2000, 0.01)
 	b := &Builder{
 		fd:           file,
 		currentBlock: bytes.NewBuffer(make([]byte, 0, TargetBlockSize)),
 		blockIndices: make([]*BlockMeta, 0),
+		filter: bf,
 	}
 	return b, err
 }
@@ -51,6 +55,7 @@ func (b *Builder) Add(key []byte, value []byte, meta byte) error {
 	if b.currentBlock.Len() == 0 {
 		b.firstKeyInBlock = append([]byte{}, key...)
 	}
+	b.filter.Add(key)
 	h := skl.EntryHeader{
 		Meta:     meta,
 		KeyLen:   uint32(len(key)),
@@ -86,31 +91,45 @@ func (b *Builder) finishBlock() error {
 	return nil
 }
 func (b *Builder) Finish() error {
-	if err := b.finishBlock(); err != nil {
-		return err
-	}
-	offset := uint64(b.fileSize)
-	indexBuf := new(bytes.Buffer)
-	var buf [10]byte
-	for _, meta := range b.blockIndices {
-		n := binary.PutUvarint(buf[:], uint64(len(meta.FirstKey)))
-		indexBuf.Write(buf[:n])
-		indexBuf.Write(meta.FirstKey)
-		n = binary.PutUvarint(buf[:], uint64(meta.Offset))
-		indexBuf.Write(buf[:n])
-		n = binary.PutUvarint(buf[:], uint64(meta.Size))
-		indexBuf.Write(buf[:n])
-	}
-	if _, err := b.fd.Write(indexBuf.Bytes()); err != nil {
-		return err
-	}
-	var footer [8]byte
-	binary.BigEndian.PutUint64(footer[:], offset)
-	if _, err := b.fd.Write(footer[:]); err != nil {
-		return err
-	}
-	if err := b.fd.Sync(); err != nil {
-		return err
-	}
-	return b.fd.Close()
+    if err := b.finishBlock(); err != nil {
+        return err
+    }
+
+    indexOffset := uint64(b.fileSize)
+    indexBuf := new(bytes.Buffer)
+    var buf [10]byte
+    for _, meta := range b.blockIndices {
+        n := binary.PutUvarint(buf[:], uint64(len(meta.FirstKey)))
+        indexBuf.Write(buf[:n])
+        indexBuf.Write(meta.FirstKey)
+        n = binary.PutUvarint(buf[:], uint64(meta.Offset))
+        indexBuf.Write(buf[:n])
+        n = binary.PutUvarint(buf[:], uint64(meta.Size))
+        indexBuf.Write(buf[:n])
+    }
+    if _, err := b.fd.Write(indexBuf.Bytes()); err != nil {
+        return err
+    }
+    b.fileSize += int64(indexBuf.Len())
+    filterOffset := uint64(b.fileSize)
+    filterData := b.filter.Bytes()
+    filterLen := uint64(len(filterData))
+
+    if _, err := b.fd.Write(filterData); err != nil {
+        return err
+    }
+    b.fileSize += int64(filterLen)
+    var footer [24]byte
+    binary.BigEndian.PutUint64(footer[0:8], indexOffset)
+    binary.BigEndian.PutUint64(footer[8:16], filterOffset)
+    binary.BigEndian.PutUint64(footer[16:24], filterLen)
+
+    if _, err := b.fd.Write(footer[:]); err != nil {
+        return err
+    }
+
+    if err := b.fd.Sync(); err != nil {
+        return err
+    }
+    return b.fd.Close()
 }
