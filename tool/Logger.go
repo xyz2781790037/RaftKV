@@ -90,12 +90,24 @@ func (h *ColoredHandler) WithGroup(name string) slog.Handler {
 	}
 }
 
-func NewLogger(level slog.Level) *slog.Logger {
+func newLogger(level slog.Level) *slog.Logger {
 	opts := &slog.HandlerOptions{
 		Level: level,
 	}
 	handler := NewColoredHandler(io.Writer(os.Stdout), opts)
 	return slog.New(handler)
 }
-
-var Log *slog.Logger = NewLogger(slog.LevelInfo)
+type Logger struct{
+	*slog.Logger
+}
+func NewLogger(level slog.Level) *Logger {
+	log := newLogger(level)
+	return &Logger{
+		log,
+	}
+}
+var Log *Logger = NewLogger(slog.LevelInfo)
+func (l *Logger)Fatal(msg string, args ...any){
+	l.Error(msg,args...)
+	panic("")
+}
