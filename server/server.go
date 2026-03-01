@@ -38,7 +38,7 @@ type Server struct {
 	Options StartOptions
 }
 
-var maxMsgSize = 1024 * 1024 * 64
+var maxMsgSize = 1024 * 1024 * 1024
 
 func ServerStart(opts StartOptions) (*Server, error) {
 	nodeDir := fmt.Sprintf("%s/node_%d", opts.DataDir, opts.NodeID)

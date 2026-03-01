@@ -83,13 +83,8 @@ func (rf *Raft) heartbeatTimer() {
             needSend = true
 
         case <-rf.sendHeartbeatAtOnceCh:
-            // 收到 Propose 的信号，说明有新日志了
-            // 【关键修改】不要立刻发！进入缓冲模式
-            
-            // 启动一个短定时器
             batchTimer := time.NewTimer(BatchDuration)
             
-            // 在这 15ms 内，把后续涌进来的信号全部“吃掉”
         DrainLoop:
             for {
                 select {
