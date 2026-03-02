@@ -27,7 +27,7 @@ type PeerManager struct {
 	peers map[int64]*RaftPeer
 	myID  int64 // 记录自己的 ID，方便遍历时跳过自己
 }
-var maxMsgSize = 1024 * 1024 * 64
+var maxMsgSize = 1024 * 1024 * 1024
 func NewRaftPeer(id int64, addr string) *RaftPeer {
 	rp := &RaftPeer{
 		id:   id,
@@ -110,7 +110,7 @@ func (rp *RaftPeer) CallInstallSnapshot(in *pb.InstallSnapshotArgs) (*pb.Install
 		tool.Log.Error("stub in peer is nil")
 		return nil, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	reply, err := stub.InstallSnapshot(ctx, in)

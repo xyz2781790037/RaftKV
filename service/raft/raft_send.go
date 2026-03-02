@@ -152,6 +152,7 @@ func (rf *Raft) sendAppendEntries() {
 	}
 
 }
+
 func (rf *Raft) sendInstallSnapshot(server int64, peer *RaftPeer) {
 	snapMeta, snapshotData, ok := rf.store.Log.LoadSnapshot()
 	if !ok {
@@ -194,7 +195,6 @@ func (rf *Raft) sendInstallSnapshot(server int64, peer *RaftPeer) {
 	}
 
 }
-
 func (rf *Raft) updateCommitIndex() {
 	// 假设 rf.matchIndex 已经是 []int64 类型了
 	// 假设 rf.commitIndex, rf.getLastLogIndex() 都是 int64
