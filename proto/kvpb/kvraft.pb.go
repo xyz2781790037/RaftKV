@@ -83,6 +83,7 @@ type PutAppendArgs struct {
 	Op            string                 `protobuf:"bytes,3,opt,name=op,proto3" json:"op,omitempty"`
 	ClientId      int64                  `protobuf:"varint,4,opt,name=clientId,proto3" json:"clientId,omitempty"`
 	SeqId         int64                  `protobuf:"varint,5,opt,name=seqId,proto3" json:"seqId,omitempty"`
+	Ttl           int64                  `protobuf:"varint,6,opt,name=ttl,proto3" json:"ttl,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -148,6 +149,13 @@ func (x *PutAppendArgs) GetClientId() int64 {
 func (x *PutAppendArgs) GetSeqId() int64 {
 	if x != nil {
 		return x.SeqId
+	}
+	return 0
+}
+
+func (x *PutAppendArgs) GetTtl() int64 {
+	if x != nil {
+		return x.Ttl
 	}
 	return 0
 }
@@ -315,6 +323,7 @@ type Op struct {
 	Value         string                 `protobuf:"bytes,3,opt,name=Value,proto3" json:"Value,omitempty"`
 	ClientId      int64                  `protobuf:"varint,4,opt,name=ClientId,proto3" json:"ClientId,omitempty"`
 	SeqId         int64                  `protobuf:"varint,5,opt,name=SeqId,proto3" json:"SeqId,omitempty"`
+	Ttl           int64                  `protobuf:"varint,6,opt,name=ttl,proto3" json:"ttl,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -380,6 +389,13 @@ func (x *Op) GetClientId() int64 {
 func (x *Op) GetSeqId() int64 {
 	if x != nil {
 		return x.SeqId
+	}
+	return 0
+}
+
+func (x *Op) GetTtl() int64 {
+	if x != nil {
+		return x.Ttl
 	}
 	return 0
 }
@@ -500,13 +516,14 @@ var File_kvraft_proto protoreflect.FileDescriptor
 
 const file_kvraft_proto_rawDesc = "" +
 	"\n" +
-	"\fkvraft.proto\x12\x06kvraft\"y\n" +
+	"\fkvraft.proto\x12\x06kvraft\"\x8b\x01\n" +
 	"\rPutAppendArgs\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x0e\n" +
 	"\x02op\x18\x03 \x01(\tR\x02op\x12\x1a\n" +
 	"\bclientId\x18\x04 \x01(\x03R\bclientId\x12\x14\n" +
-	"\x05seqId\x18\x05 \x01(\x03R\x05seqId\"1\n" +
+	"\x05seqId\x18\x05 \x01(\x03R\x05seqId\x12\x10\n" +
+	"\x03ttl\x18\x06 \x01(\x03R\x03ttl\"1\n" +
 	"\x0ePutAppendReply\x12\x1f\n" +
 	"\x03err\x18\x01 \x01(\x0e2\r.kvraft.ErrorR\x03err\"M\n" +
 	"\aGetArgs\x12\x10\n" +
@@ -515,13 +532,14 @@ const file_kvraft_proto_rawDesc = "" +
 	"\x05seqId\x18\x03 \x01(\x03R\x05seqId\"A\n" +
 	"\bGetReply\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\tR\x05value\x12\x1f\n" +
-	"\x03err\x18\x02 \x01(\x0e2\r.kvraft.ErrorR\x03err\"|\n" +
+	"\x03err\x18\x02 \x01(\x0e2\r.kvraft.ErrorR\x03err\"\x8e\x01\n" +
 	"\x02Op\x12\x1c\n" +
 	"\tOperation\x18\x01 \x01(\tR\tOperation\x12\x10\n" +
 	"\x03Key\x18\x02 \x01(\tR\x03Key\x12\x14\n" +
 	"\x05Value\x18\x03 \x01(\tR\x05Value\x12\x1a\n" +
 	"\bClientId\x18\x04 \x01(\x03R\bClientId\x12\x14\n" +
-	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId\"T\n" +
+	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId\x12\x10\n" +
+	"\x03ttl\x18\x06 \x01(\x03R\x03ttl\"T\n" +
 	"\fBatchGetArgs\x12\x12\n" +
 	"\x04Keys\x18\x01 \x03(\tR\x04Keys\x12\x1a\n" +
 	"\bClientId\x18\x02 \x01(\x03R\bClientId\x12\x14\n" +
