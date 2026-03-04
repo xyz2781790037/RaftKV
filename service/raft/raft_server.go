@@ -131,10 +131,10 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		}
 		if logInsertIndex > rf.getLastLogIndex() {
 			// rf.log = append(rf.log, args.Entries[newEntriesStartIndex:]...)
-			newEntries := args.Entries[newEntriesStartIndex:] // 1. 獲取新日誌切片
-			rf.log = append(rf.log, newEntries...)            // 2. 更新內存
+			newEntries := args.Entries[newEntriesStartIndex:]
+			rf.log = append(rf.log, newEntries...)
 			rf.mu.Unlock()
-			rf.store.Log.AppendLog(newEntries)
+			rf.store.Log.RewriteLogs(rf.log)
 			rf.mu.Lock()
 			persistNeeded = true
 			break
@@ -224,7 +224,7 @@ func (rf *Raft) InstallSnapshot(ctx context.Context, args *pb.InstallSnapshotArg
 	}
 
 	rf.store.Log.SaveSnapshot(rf.lastIncludedTerm, rf.lastIncludedIndex, args.Data)
-	rf.store.Log.AppendLog(rf.log)
+	rf.store.Log.RewriteLogs(rf.log)
 	tool.Log.Info("调用Save in raft_server")
 	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
 
