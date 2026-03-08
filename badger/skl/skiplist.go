@@ -1,6 +1,7 @@
 package skl
 
 import (
+	"RaftKV/badger/y"
 	"bytes"
 	"math/rand"
 	"sync/atomic"
@@ -50,7 +51,7 @@ func (sl *SkipList) findSpliceForLevel(key []byte, curr *node, level int) (*node
 		if next == nil{
 			break
 		}
-		cmp := bytes.Compare(next.entry.Key,key)
+		cmp := y.CompareKeys(next.entry.Key,key)
 		if cmp < 0{
 			curr = next
 		}else{
@@ -99,7 +100,7 @@ func (sl *SkipList) Get(key []byte) *Entry {
 			if next == nil {
 				break
 			}
-			cmp := bytes.Compare(next.entry.Key, key)
+			cmp := y.CompareKeys(next.entry.Key, key)
 			if cmp < 0 {
 				curr = next
 			} else if cmp == 0 {

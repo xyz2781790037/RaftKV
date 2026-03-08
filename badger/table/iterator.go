@@ -1,135 +1,205 @@
 package table
 
 import (
+	"RaftKV/badger/skl"
 	"RaftKV/badger/y"
-	"bytes"
+	"io"
+	"sort"
 )
-var _ y.Iterator = (*MergeIterator)(nil)
-type MergeIterator struct {
-	left    *node
-	right   *node
-	small   *node // 指向当前 Key 较小的那个 node (left 或 right)
-	curKey  []byte
+
+type blockIterator struct {
+	data []byte // Block 数据
+	idx  int    // 原 offset
+	key  []byte
+	val  []byte
+	err  error
 }
 
-// node 包装底层迭代器，缓存当前状态
-type node struct {
-	valid bool
-	key   []byte
-	iter  y.Iterator // 这里可以是 TableIterator，也可以是另一个 MergeIterator
+func (itr *blockIterator) setBlock(data []byte) {
+	itr.data = data
+	itr.idx = 0
+	itr.err = nil
+	itr.parse()
 }
-func (n *node) setKey(){
-	n.valid = n.iter.Valid()
-	if n.valid {
-		n.key = n.iter.Key()
-	} else {
-		n.key = nil
-	}
+
+func (itr *blockIterator) seekToFirst() {
+	itr.idx = 0
+	itr.parse()
 }
-func (n *node) next() {
-	n.iter.Next()
-	n.setKey()
-}
-func (n *node) rewind() {
-	n.iter.Rewind()
-	n.setKey()
-}
-func (n *node) seek(key []byte) {
-	n.iter.Seek(key)
-	n.setKey()
-}
-func NewMergeIterator(iters []y.Iterator) y.Iterator{
-	switch len(iters){
-	case 0:
-		return &MergeIterator{}
-	case 1:
-		return iters[0]
-	case 2:
-		return newMergeIterator(iters[0],iters[1])
-	default:
-		mid := len(iters) / 2
-		return newMergeIterator(
-			NewMergeIterator(iters[:mid]),
-			NewMergeIterator(iters[mid:]),
-		)
-	}
-}
-func newMergeIterator(lo, ro y.Iterator) *MergeIterator {
-	mi := &MergeIterator{
-		left:  &node{iter: lo},
-		right: &node{iter: ro},
-	}
-	mi.Rewind()
-	return mi
-}
-func (mi *MergeIterator) fix(){
-	if !mi.left.valid{
-		if !mi.right.valid{
-			mi.small = nil
-			return
-		}
-		mi.small = mi.right
-		return
-	}
-	if !mi.right.valid {
-		mi.small = mi.left
-		return
-	}
-	if bytes.Compare(mi.left.key, mi.right.key) <= 0 {
-		mi.small = mi.left
-	} else {
-		mi.small = mi.right
-	}
-}
-func (mi *MergeIterator) Rewind(){
-	if mi.left == nil || mi.right == nil {
-		return
-	}
-	mi.left.rewind()
-	mi.right.rewind()
-	mi.fix()
-	mi.setCurrent()
-}
-func (mi *MergeIterator) Seek(key []byte){
-	mi.left.seek(key)
-	mi.right.seek(key)
-	mi.fix()
-	mi.setCurrent()
-}
-func (mi *MergeIterator) Valid() bool{
-	return mi.small != nil && mi.small.valid
-}
-func (mi *MergeIterator) Key() []byte{
-	return mi.curKey
-}
-func (mi *MergeIterator) Value() y.ValueStruct{
-	if mi.small == nil {
-		return y.ValueStruct{}
-	}
-	return mi.small.iter.Value()
-}
-func (mi *MergeIterator) Close() error{
-	err1 := mi.left.iter.Close()
-	err2 := mi.right.iter.Close()
-	if err1 != nil {
-		return err1
-	}
-	return err2
-}
-func (mi *MergeIterator) Next(){
-	for mi.Valid(){
-		if !bytes.Equal(mi.small.key,mi.curKey){
+
+func (itr *blockIterator) seek(key []byte) {
+	itr.seekToFirst()
+	for itr.Valid() {
+		if y.CompareKeys(itr.key, key) >= 0 {
 			break
 		}
-		mi.small.next()
-		mi.fix()
+		itr.next()
 	}
-	mi.setCurrent()
 }
-func (mi *MergeIterator) setCurrent() {
-	if mi.small == nil || !mi.small.valid {
-		mi.curKey = nil
+
+func (itr *blockIterator) next() {
+	if itr.idx >= len(itr.data) {
+		itr.err = io.EOF
 		return
 	}
-	mi.curKey = append(mi.curKey[:0], mi.small.key...)
+
+	header, n := skl.DecodeHeader(itr.data[itr.idx:])
+	if header == nil {
+		itr.err = io.EOF
+		return
+	}
+
+	itr.idx += n + int(header.KeyLen) + int(header.ValueLen)
+	itr.parse()
 }
+
+// parse 解析当前 idx 处的 Entry
+func (itr *blockIterator) parse() {
+	if itr.idx >= len(itr.data) {
+		itr.key = nil
+		itr.val = nil
+		itr.err = io.EOF
+		return
+	}
+
+	header, n := skl.DecodeHeader(itr.data[itr.idx:])
+	if header == nil {
+		itr.key = nil
+		itr.val = nil
+		itr.err = io.EOF
+		return
+	}
+
+	keyOffset := itr.idx + n
+	itr.key = itr.data[keyOffset : keyOffset+int(header.KeyLen)]
+
+	valOffset := keyOffset + int(header.KeyLen)
+	itr.val = itr.data[valOffset : valOffset+int(header.ValueLen)]
+}
+
+func (itr *blockIterator) Valid() bool {
+	return itr.key != nil && itr.err == nil
+}
+
+func (itr *blockIterator) Close() {
+}
+
+type Iterator struct {
+	t    *Table
+	bpos int           // 原 blockIdx，官方叫 bpos (Block Position)
+	bi   blockIterator // 原 blockIter，官方叫 bi，且是结构体值而非指针
+	err  error
+	opt  int // 预留选项
+}
+
+func (t *Table) NewIterator(opt int) *Iterator {
+	return &Iterator{
+		t:    t,
+		bpos: -1,
+		opt:  opt,
+	}
+}
+
+func (itr *Iterator) Close() error {
+	return nil
+}
+
+func (itr *Iterator) Valid() bool {
+	return itr.err == nil && itr.bi.Valid()
+}
+
+func (itr *Iterator) Rewind() {
+	itr.seekToFirst()
+}
+
+// Seek -> 内部调用 seek
+func (itr *Iterator) Seek(key []byte) {
+	itr.seek(key)
+}
+
+// Next -> 内部调用 next
+func (itr *Iterator) Next() {
+	itr.next()
+}
+
+// Key 返回当前 Key
+func (itr *Iterator) Key() []byte {
+	return itr.bi.key
+}
+
+// Value 返回 ValueStruct
+func (itr *Iterator) Value() y.ValueStruct {
+	var vs y.ValueStruct
+	vs.Decode(itr.bi.val)
+	return vs
+}
+
+// seekToFirst
+func (itr *Iterator) seekToFirst() {
+	itr.bpos = 0
+	itr.loadBlock()
+	if itr.err == nil {
+		itr.bi.seekToFirst()
+	}
+}
+
+func (itr *Iterator) seek(key []byte) {
+	idx := sort.Search(len(itr.t.blockIndices), func(i int) bool {
+		return y.CompareKeys(itr.t.blockIndices[i].FirstKey, key) > 0
+	})
+
+	itr.bpos = idx - 1
+	if itr.bpos < 0 {
+		itr.bpos = 0
+	}
+
+	itr.loadBlock()
+
+	if itr.err == nil {
+		itr.bi.seek(key)
+		for !itr.bi.Valid() && itr.bpos < len(itr.t.blockIndices)-1 {
+			itr.bpos++        // 跨到下一个 Block
+			itr.loadBlock()   // 加载新 Block 的数据
+			if itr.err == nil {
+				itr.bi.seek(key) // 再次在这个新 Block 里寻找
+			}
+		}
+	}
+}
+
+func (itr *Iterator) next() {
+	if !itr.Valid() {
+		return
+	}
+
+	itr.bi.next()
+	if !itr.bi.Valid() {
+		itr.bpos++
+		itr.loadBlock()
+	}
+}
+
+func (itr *Iterator) loadBlock() {
+	if itr.bpos < 0 || itr.bpos >= len(itr.t.blockIndices) {
+		itr.err = io.EOF
+		return
+	}
+
+	itr.err = nil
+	meta := itr.t.blockIndices[itr.bpos]
+	blockData := make([]byte, meta.Size)
+
+	_, err := itr.t.fd.ReadAt(blockData, int64(meta.Offset))
+	if err != nil {
+		itr.err = err
+		return
+	}
+
+	itr.bi.setBlock(blockData)
+}
+
+var (
+	NONE     int = 0
+	REVERSED int = 2
+	NOCACHE  int = 4
+)
