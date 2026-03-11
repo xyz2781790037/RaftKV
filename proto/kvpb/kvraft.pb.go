@@ -405,6 +405,7 @@ type BatchGetArgs struct {
 	Keys          []string               `protobuf:"bytes,1,rep,name=Keys,proto3" json:"Keys,omitempty"` // 一次查多个 Key
 	ClientId      int64                  `protobuf:"varint,2,opt,name=ClientId,proto3" json:"ClientId,omitempty"`
 	SeqId         int64                  `protobuf:"varint,3,opt,name=SeqId,proto3" json:"SeqId,omitempty"`
+	Tss           []uint64               `protobuf:"varint,4,rep,packed,name=tss,proto3" json:"tss,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -458,6 +459,13 @@ func (x *BatchGetArgs) GetSeqId() int64 {
 		return x.SeqId
 	}
 	return 0
+}
+
+func (x *BatchGetArgs) GetTss() []uint64 {
+	if x != nil {
+		return x.Tss
+	}
+	return nil
 }
 
 type BatchGetReply struct {
@@ -539,11 +547,12 @@ const file_kvraft_proto_rawDesc = "" +
 	"\x05Value\x18\x03 \x01(\tR\x05Value\x12\x1a\n" +
 	"\bClientId\x18\x04 \x01(\x03R\bClientId\x12\x14\n" +
 	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId\x12\x10\n" +
-	"\x03ttl\x18\x06 \x01(\x03R\x03ttl\"T\n" +
+	"\x03ttl\x18\x06 \x01(\x03R\x03ttl\"f\n" +
 	"\fBatchGetArgs\x12\x12\n" +
 	"\x04Keys\x18\x01 \x03(\tR\x04Keys\x12\x1a\n" +
 	"\bClientId\x18\x02 \x01(\x03R\bClientId\x12\x14\n" +
-	"\x05SeqId\x18\x03 \x01(\x03R\x05SeqId\"\xa6\x01\n" +
+	"\x05SeqId\x18\x03 \x01(\x03R\x05SeqId\x12\x10\n" +
+	"\x03tss\x18\x04 \x03(\x04R\x03tss\"\xa6\x01\n" +
 	"\rBatchGetReply\x129\n" +
 	"\x06Values\x18\x01 \x03(\v2!.kvraft.BatchGetReply.ValuesEntryR\x06Values\x12\x1f\n" +
 	"\x03Err\x18\x02 \x01(\x0e2\r.kvraft.ErrorR\x03Err\x1a9\n" +

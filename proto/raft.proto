@@ -47,6 +47,8 @@ message InstallSnapshotArgs {
     int64 LastIncludedIndex = 3;
     int64 LastIncludedTerm = 4;
     bytes Data = 5;
+    int64 Offset = 6;
+    bool Done = 7;
 }
 message InstallSnapshotReply {
     int64 Term = 1;
@@ -67,5 +69,5 @@ message FullSnapshot{
  service Raft {
     rpc RequestVote(RequestVoteArgs) returns (RequestVoteReply);
     rpc AppendEntries(AppendEntriesArgs) returns (AppendEntriesReply);
-    rpc InstallSnapshot(InstallSnapshotArgs) returns (InstallSnapshotReply);
+    rpc InstallSnapshot(stream InstallSnapshotArgs) returns (InstallSnapshotReply);
 }
