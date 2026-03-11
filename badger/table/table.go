@@ -198,8 +198,6 @@ func (t *Table) Get(key []byte, readTs uint64) ([]byte, byte, uint64, error) {
 
 	idx = idx - 1
 	if idx < 0 {
-		// 🚨 如果搜索结果导致 idx < 0，说明 searchMin 比整个文件的第一个 Key 还要小。
-		// 由于 searchMin 是极限下界，目标 Key 极大概率就存在于第 0 个 Block 中，绝不能返回 Not Found！
 		idx = 0
 	}
 
@@ -290,7 +288,7 @@ func (t *Table) Close() error {
 // 	}
 // 	return nil
 // }
-func (t *Table) Scan(fn func(key, val []byte, meta byte) bool) error {
+func (t *Table) Scan(fn func(key, val []byte, meta byte,expiresAt uint64) bool) error {
 	for _, meta := range t.blockIndices {
 		blockData := make([]byte, meta.Size)
 		if _, err := t.fd.ReadAt(blockData, int64(meta.Offset)); err != nil {
@@ -313,9 +311,8 @@ func (t *Table) Scan(fn func(key, val []byte, meta byte) bool) error {
 			// 🚨 核心修复：还原出真实的 UserValue，防止快照生成时发生双重编码
 			var vs y.ValueStruct
 			vs.Decode(encodedVal)
-
 			// 回调函数只接收纯净的 UserValue
-			if !fn(key, vs.UserValue, h.Meta) {
+			if !fn(key, vs.UserValue, h.Meta,vs.ExpiresAt) {
 				return nil 
 			}
 

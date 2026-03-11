@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 )
 
 // RunCompaction 执行多路归并和磁盘文件的原子替换
@@ -82,6 +83,11 @@ func (lc *LevelsController) RunCompaction(cd *CompactDef) error {
 			hasValidVersionBelowThreshold = true
 			if vs.Meta&y.BitDelete > 0 && cd.NextLevel == MaxLevels-1 {
 				continue
+			}
+			if vs.ExpiresAt > 0 && uint64(time.Now().Unix()) > vs.ExpiresAt {
+				if cd.NextLevel == MaxLevels-1 {
+					continue 
+				}
 			}
 		}
 

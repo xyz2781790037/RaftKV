@@ -12,7 +12,7 @@ import (
 	"sync"
 )
 
-const maxHeaderSize = 11
+const maxHeaderSize = 21
 
 var ErrCrcMismatch = errors.New("wal: crc mismatch")
 
@@ -50,6 +50,7 @@ func (w *WAL) Write(e *skl.Entry) error {
 	index := 1
 	index += binary.PutUvarint(buf[index:], uint64(keyLen))
 	index += binary.PutUvarint(buf[index:], uint64(valLen))
+	index += binary.PutUvarint(buf[index:], e.ExpiresAt)
 
 	copy(buf[index:], e.Key)
 	index += keyLen
@@ -89,7 +90,7 @@ func (w *WAL) ReadWAL() ([]*skl.Entry, error) {
 		entries = append(entries, e)
 		validBytes += totalSize
 	}
-	return entries,nil
+	return entries, nil
 }
 
 func (w *WAL) readEntry(r *bufio.Reader) (*skl.Entry, int64, error) {
@@ -105,18 +106,24 @@ func (w *WAL) readEntry(r *bufio.Reader) (*skl.Entry, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	exp, err := binary.ReadUvarint(r)
+	if err != nil {
+		return nil, 0, err
+	}
 	var headerBuf [maxHeaderSize]byte
 	headerBuf[0] = meta
 	n := 1
 	n += binary.PutUvarint(headerBuf[n:], kLen)
 	n += binary.PutUvarint(headerBuf[n:], vLen)
+	n += binary.PutUvarint(headerBuf[n:], exp)
 
 	kl := int(kLen)
 	vl := int(vLen)
 	e := &skl.Entry{
-		Meta:  meta,
-		Key:   make([]byte, kl),
-		Value: make([]byte, vl),
+		Meta:      meta,
+		Key:       make([]byte, kl),
+		Value:     make([]byte, vl),
+		ExpiresAt: exp,
 	}
 	if _, err := io.ReadFull(r, e.Key); err != nil {
 		return nil, 0, err
@@ -155,6 +162,7 @@ func (w *WAL) WriteBatch(entries []*skl.Entry) error {
 		idx := 1
 		idx += binary.PutUvarint(buf[idx:], uint64(keyLen))
 		idx += binary.PutUvarint(buf[idx:], uint64(valLen))
+		idx += binary.PutUvarint(buf[idx:], e.ExpiresAt)
 		copy(buf[idx:], e.Key)
 		idx += keyLen
 		copy(buf[idx:], e.Value)
@@ -195,8 +203,8 @@ func (w *WAL) Sync() error {
 
 // Close 关闭文件
 
-	func (w *WAL) Close() error {
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		return w.f.Close()
-	}
+func (w *WAL) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.f.Close()
+}

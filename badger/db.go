@@ -417,7 +417,14 @@ func (db *DB) Backup() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 4*db.skl.SklSize()))
 	headerBuf := make([]byte, maxHeaderSize)
 
-	writeEntry := func(key, value []byte, meta byte) bool {
+	writeEntry := func(key, value []byte, meta byte, expiresAt uint64) bool {
+		vs := y.ValueStruct{
+			Meta:      meta, 
+			UserValue: value, 
+			ExpiresAt: expiresAt,
+		}
+		encodedVal := make([]byte, vs.EncodedSize())
+		vs.Encode(encodedVal)
 		h := skl.EntryHeader{
 			Meta:     meta,
 			KeyLen:   uint32(len(key)),
@@ -439,12 +446,12 @@ func (db *DB) Backup() ([]byte, error) {
 
 	if db.immSkl != nil {
 		db.immSkl.Scan(func(e *skl.Entry) bool {
-			return writeEntry(e.Key, e.Value, e.Meta)
+			return writeEntry(e.Key, e.Value, e.Meta,e.ExpiresAt)
 		})
 	}
 
 	db.skl.Scan(func(e *skl.Entry) bool {
-		return writeEntry(e.Key, e.Value, e.Meta)
+		return writeEntry(e.Key, e.Value, e.Meta,e.ExpiresAt)
 	})
 
 	return buf.Bytes(), nil
@@ -551,7 +558,7 @@ func (db *DB) LoadFrom(data []byte) error {
 	db.wal = newWal
 	db.skl = skl.NewSkiplist()
 	db.immSkl = nil
-	db.mu.Unlock() // 🚨 核心修复：清理完毕后立刻释放全局大锁！
+	db.mu.Unlock()
 
 	if len(data) == 0 {
 		return nil
@@ -575,9 +582,12 @@ func (db *DB) LoadFrom(data []byte) error {
 		val := make([]byte, header.ValueLen)
 		copy(val, data[offset:offset+int(header.ValueLen)])
 		offset += int(header.ValueLen)
+		var vs y.ValueStruct
+		vs.Decode(val)
 
-		entry := skl.NewEntry(key, val)
+		entry := skl.NewEntry(key,vs.UserValue)
 		entry.Meta = header.Meta
+		entry.ExpiresAt = vs.ExpiresAt 
 		batch = append(batch, entry)
 
 		if len(batch) >= 1000 {

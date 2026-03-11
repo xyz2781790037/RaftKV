@@ -198,61 +198,6 @@ func (txn *Txn) Delete(key []byte) error {
 	return txn.modify(e)
 }
 
-// func (txn *Txn) Get(key []byte) (*Item, error) {
-// 	if len(key) == 0 {
-// 		return nil, ErrEmptyKey
-// 	} else if txn.discarded {
-// 		return nil, ErrDiscardedTxn
-// 	}
-
-// 	if txn.update {
-// 		if e, ok := txn.pendingWrites[string(key)]; ok && bytes.Equal(key, e.Key) {
-// 			if isDeletedOrExpired(e.Meta, e.ExpiresAt) {
-// 				return nil, ErrKeyNotFound
-// 			}
-// 			return &Item{
-// 				key:       key,
-// 				val:       e.Value, // 直接引用内存值
-// 				meta:      e.Meta,
-// 				userMeta:  0,
-// 				version:   txn.readTs,
-// 				expiresAt: e.ExpiresAt,
-// 				txn:       txn,
-// 			}, nil
-// 		}
-// 		txn.addReadKey(key)
-// 	}
-// 	opt := DefaultIteratorOptions
-// 	opt.Prefix = key
-// 	it := txn.NewIterator(opt)
-// 	defer it.Close()
-
-// 	it.Seek(key)
-// 	if !it.Valid() {
-// 		return nil, ErrKeyNotFound
-// 	}
-
-// 	itItem := it.Item()
-// 	if !bytes.Equal(itItem.Key(), key) {
-// 		return nil, ErrKeyNotFound
-// 	}
-
-// 	resItem := &Item{
-// 		key:       y.SafeCopy(nil, itItem.Key()),
-// 		txn:       txn,
-// 		meta:      itItem.Meta(),
-// 		userMeta:  itItem.UserMeta(),
-// 		version:   itItem.Version(),
-// 		expiresAt: itItem.ExpiresAt(),
-// 	}
-// 	if itItem.vptr != nil {
-// 		resItem.vptr = y.SafeCopy(nil, itItem.vptr)
-// 	} else {
-// 		resItem.val = y.SafeCopy(nil, itItem.val)
-// 	}
-
-//		return resItem, nil
-//	}
 func (txn *Txn) Get(key []byte) (*Item, error) {
 	if len(key) == 0 {
 		return nil, ErrEmptyKey
@@ -273,14 +218,14 @@ func (txn *Txn) Get(key []byte) (*Item, error) {
 	txn.readsLock.Unlock()
 
 	internalKey := y.KeyWithTs(key, txn.readTs)
-	
+
 	checkMem := func(sk *skl.SkipList) (*Item, error) {
 		if sk == nil {
 			return nil, ErrKeyNotFound
 		}
 		it := sk.NewIterator(false)
 		defer it.Close()
-		
+
 		it.Seek(internalKey)
 		for it.Valid() {
 			userKey := y.ParseKey(it.Key())
@@ -288,7 +233,7 @@ func (txn *Txn) Get(key []byte) (*Item, error) {
 				ts := y.ParseTs(it.Key())
 				if ts <= txn.readTs {
 					vs := it.Value()
-					if vs.Meta&y.BitDelete > 0 {
+					if vs.Meta&y.BitDelete > 0 || (vs.ExpiresAt > 0 && uint64(time.Now().Unix()) > vs.ExpiresAt) {
 						return nil, ErrKeyNotFound
 					}
 					res := &Item{
@@ -327,24 +272,6 @@ func (txn *Txn) Get(key []byte) (*Item, error) {
 			return item, nil
 		}
 	}
-
-	// for _, tables := range txn.db.levelTables {
-	// 	for i := 0; i < len(tables); i++ {
-	// 		val, meta, ts, err := tables[i].Get(key, txn.readTs)
-	// 		if err == nil {
-	// 			if meta&y.BitDelete > 0 {
-	// 				return nil, ErrKeyNotFound
-	// 			}
-	// 			return &Item{
-	// 				key:     y.SafeCopy(nil, key),
-	// 				txn:     txn,
-	// 				meta:    meta,
-	// 				val:     y.SafeCopy(nil, val),
-	// 				version: ts,
-	// 			}, nil
-	// 		}
-	// 	}
-	// }
 	for _, tables := range txn.db.levelTables {
 		for i := 0; i < len(tables); i++ {
 			val, meta, ts, err := tables[i].Get(key, txn.readTs)
@@ -352,19 +279,21 @@ func (txn *Txn) Get(key []byte) (*Item, error) {
 				if meta&y.BitDelete > 0 {
 					return nil, ErrKeyNotFound
 				}
-				
+
 				var vs y.ValueStruct
 				vs.Decode(val)
-
+				if vs.Meta&y.BitDelete > 0 || (vs.ExpiresAt > 0 && uint64(time.Now().Unix()) > vs.ExpiresAt) {
+					return nil, ErrKeyNotFound
+				}
 				res := &Item{
 					key:       y.SafeCopy(nil, key),
 					txn:       txn,
-					meta:      vs.Meta,     // 使用解码后的 Meta
+					meta:      vs.Meta, // 使用解码后的 Meta
 					userMeta:  vs.UserMeta,
 					version:   ts,
 					expiresAt: vs.ExpiresAt, // 恢复 TTL 属性
 				}
-				
+
 				// 根据解码后的 Meta 正确分发数据或 Vlog 指针
 				if vs.Meta&y.BitValuePointer > 0 {
 					res.vptr = y.SafeCopy(nil, vs.UserValue)
