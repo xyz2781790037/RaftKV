@@ -17,7 +17,8 @@ type KVEngine struct {
 }
 
 func NewKVEngine(dir string) (*KVEngine, error) {
-	db, err := badger.Open(dir)
+	opt := badger.DefaultOptions(dir)
+	db, err := badger.Open(opt)
 	if err != nil {
 		return nil, err
 	}

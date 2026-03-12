@@ -60,7 +60,7 @@ func main() {
 		if op == "q" || op == "quit" || op == "exit" {
 			fmt.Println("👋 正在退出客户端，再见！")
 			break
-		} else if op == "5" || op == "6" || op == "7" {
+		} else if op == "5" || op == "6" || op == "7" || op == "62" {
 			amount = readInt(reader, "输入测试数量 > ")
 			index = readInt(reader, "输入测试开始位置 > ")
 		}
@@ -130,7 +130,7 @@ func main() {
 			}
 			fmt.Printf("\n✅ 压测完成！总耗时: %v\n", time.Since(startTime))
 
-		case "6":
+		case "6","62":
 			startTime := time.Now()
 			var wg sync.WaitGroup
 			wg.Add(concurrency)
@@ -159,7 +159,13 @@ func main() {
 					defer wg.Done()
 					for j := index; j < amount+index; j++ {
 						key := strconv.Itoa(x) + ":" + strconv.Itoa(j)
-						value := "val-" + key + "-" + time.Now().String()
+						var value string
+						if op == "6"{
+							value = "val-" + key + "-" + time.Now().String()
+						}else{
+							value = "val-" + key + "-" + time.Now().String() + time.Now().String() + time.Now().String() + time.Now().String() + time.Now().String() + time.Now().String()
+						}
+						
 						c.Put(key, value)
 						atomic.AddInt64(&finishedOps, 1)
 					}
