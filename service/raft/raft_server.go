@@ -9,35 +9,31 @@ import (
 )
 
 func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.RequestVoteReply, error) {
-	tool.Log.Warn("Receive RequestVote 0", "me", rf.me, "candidate", args.CandidateId)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply := &pb.RequestVoteReply{}
+	
 	select {
 	case <-ctx.Done():
-		tool.Log.Warn("exit RequestVote 1", "me", rf.me, "candidate", args.CandidateId)
 		return reply, nil
 	default:
 	}
 	if rf.killed() {
-		tool.Log.Warn("exit RequestVote 2", "me", rf.me, "candidate", args.CandidateId)
 		return reply, nil
 	}
-	const MinElectionTimeout = 500 * time.Millisecond 
 
+	const MinElectionTimeout = 500 * time.Millisecond 
 	if time.Since(rf.lastResetElectionTime) < MinElectionTimeout {
-		
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
-		tool.Log.Warn("拒绝捣乱的 RequestVote", "candidate", args.CandidateId, "my_term", rf.currentTerm, "args_term", args.Term)
-		
+		tool.Log.Warn("拒绝捣乱的 RequestVote (Leader租约保护中)", "candidate", args.CandidateId, "my_term", rf.currentTerm, "args_term", args.Term)
 		return reply, nil
 	}
+
 	persistNeeded := false
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
-		tool.Log.Warn("exit RequestVote 3", "me", rf.me, "candidate", args.CandidateId)
 		return reply, nil
 	}
 	if args.Term > rf.currentTerm {
@@ -45,16 +41,16 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 		persistNeeded = true
 	}
 	reply.Term = rf.currentTerm
+
 	upToDate := func() bool {
 		lastLogIndex := rf.getLastLogIndex()
 		lastLogTerm := rf.getLastLogTerm()
 		if args.LastLogTerm != lastLogTerm {
-			tool.Log.Warn("exit RequestVote 5", "me", rf.me, "candidate", args.CandidateId)
 			return args.LastLogTerm > lastLogTerm
 		}
-		tool.Log.Warn("exit RequestVote 4", "me", rf.me, "candidate", args.CandidateId)
 		return args.LastLogIndex >= lastLogIndex
 	}()
+
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && upToDate {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
@@ -63,35 +59,38 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 	} else {
 		reply.VoteGranted = false
 	}
+
 	if persistNeeded {
-		tool.Log.Info("调用persist in raft_server ")
 		rf.persist()
 	}
-	tool.Log.Info("vote end", "result", reply.VoteGranted, "votedId", args.CandidateId, "Term", reply.Term)
 	return reply, nil
 }
 
 func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (*pb.AppendEntriesReply, error) {
 	rf.mu.Lock()
-
 	reply := &pb.AppendEntriesReply{}
-
 	if rf.killed() {
+		rf.mu.Unlock()
 		return reply, nil
 	}
+
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
-		tool.Log.Warn("Reject stale Leader", "me", rf.me, "stale_leader", args.LeaderId, "my_term", rf.currentTerm, "args_term", args.Term)
+		rf.mu.Unlock()
 		return reply, nil
 	}
+
 	persistNeeded := false
 	if args.Term > rf.currentTerm {
 		rf.becomeFollower(args.Term)
 		persistNeeded = true
 	}
+	
+	// 进门第一瞬间立刻重置存活时间，保证只要网络通就不脑裂
 	rf.lastResetElectionTime = time.Now()
 	rf.resetElectionTimer()
+
 	lastLogIndex := rf.getLastLogIndex()
 	if args.PrevLogIndex > lastLogIndex || args.PrevLogIndex < rf.lastIncludedIndex {
 		reply.Success = false
@@ -103,11 +102,12 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 			reply.ConflictTerm = -1
 		}
 		if persistNeeded {
-			tool.Log.Info("调用persist in raft_server ")
 			rf.persist()
 		}
+		rf.mu.Unlock()
 		return reply, nil
 	}
+
 	if rf.getLogTerm(args.PrevLogIndex) != args.PrevLogTerm {
 		reply.Success = false
 		reply.ConflictTerm = rf.getLogTerm(args.PrevLogIndex)
@@ -118,23 +118,24 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		reply.ConflictIndex = i
 
 		if persistNeeded {
-			tool.Log.Info("调用persist in raft_server ")
 			rf.persist()
 		}
+		rf.mu.Unlock()
 		return reply, nil
 	}
+
 	logInsertIndex := args.PrevLogIndex + 1
 	var newEntriesStartIndex int64 = 0
+
 	for {
 		if newEntriesStartIndex >= int64(len(args.Entries)) {
 			break
 		}
 		if logInsertIndex > rf.getLastLogIndex() {
-			// rf.log = append(rf.log, args.Entries[newEntriesStartIndex:]...)
 			newEntries := args.Entries[newEntriesStartIndex:]
 			rf.log = append(rf.log, newEntries...)
 			rf.mu.Unlock()
-			rf.store.Log.RewriteLogs(rf.log)
+			rf.store.Log.AppendLog(newEntries) // 绝对不能用 RewriteLogs
 			rf.mu.Lock()
 			persistNeeded = true
 			break
@@ -142,12 +143,13 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 
 		currentTerm := rf.getLogTerm(logInsertIndex)
 		newEntryTerm := args.Entries[newEntriesStartIndex].Term
+
 		if currentTerm != newEntryTerm {
 			sliceIndex := int(logInsertIndex - rf.lastIncludedIndex)
 			rf.log = rf.log[:sliceIndex]
 			rf.log = append(rf.log, args.Entries[newEntriesStartIndex:]...)
 			rf.mu.Unlock()
-			rf.store.Log.AppendLog(args.Entries[newEntriesStartIndex:])
+			rf.store.Log.RewriteLogs(rf.log)
 			rf.mu.Lock()
 			persistNeeded = true
 			break
@@ -166,8 +168,8 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		}
 		rf.applyCond.Signal()
 	}
+
 	if persistNeeded {
-		// tool.Log.Info("调用persist in raft_server ")
 		rf.persist()
 	}
 
@@ -175,7 +177,6 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 	rf.mu.Unlock()
 	return reply, nil
 }
-
 func (rf *Raft) InstallSnapshot(ctx context.Context, args *pb.InstallSnapshotArgs) (*pb.InstallSnapshotReply, error) {
 	rf.mu.Lock()
 

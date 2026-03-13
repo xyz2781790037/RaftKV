@@ -193,7 +193,7 @@ func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 
 	rf.store.Log.SaveSnapshot(persistLastIncludedTerm, persistLastIncludedIndex, snapshot)
 	rf.store.State.SaveState(persistTerm, persistVote)
-	tool.Log.Info("调用Save in snapshot (Async IO)")
+	tool.Log.Debug("调用Save in snapshot (Async IO)")
 	rf.mu.Lock()
 	defer rf.mu.Unlock() // 确保退出时解
 	

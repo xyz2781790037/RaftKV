@@ -55,7 +55,7 @@ func (rf *Raft) sendRequestVote() {
 		}(peer)
 	}
 }
-func (rf *Raft) sendAppendEntries() {
+func (rf *Raft) sendAppendEntries(isHeartbeat bool) {
 	rf.mu.Lock()
 	if rf.killed() || rf.state != Leader {
 		rf.mu.Unlock()
@@ -65,13 +65,12 @@ func (rf *Raft) sendAppendEntries() {
 	leaderID := rf.me
 	leaderCommit := rf.commitIndex
 	rf.mu.Unlock()
+
 	heartbeatAckCount := 1
 	peers := rf.peers.CloneList()
 	notified := false
+
 	for _, peer := range peers {
-		if peer.id == rf.me {
-			continue
-		}
 		go func(peer *RaftPeer) {
 			rf.mu.Lock()
 			if rf.killed() || rf.state != Leader || rf.currentTerm != currentTerm {
@@ -80,21 +79,25 @@ func (rf *Raft) sendAppendEntries() {
 			}
 			i := peer.id
 			nextIndex := rf.nextIndex[i]
-			if nextIndex <= rf.lastIncludedIndex {
+			
+			if !isHeartbeat && nextIndex <= rf.lastIncludedIndex {
 				rf.mu.Unlock()
 				go rf.sendInstallSnapshot(i, peer)
 				return
 			}
 			
+			if isHeartbeat && nextIndex <= rf.lastIncludedIndex {
+				nextIndex = rf.getLastLogIndex() + 1
+			}
+
 			prevLogIndex := nextIndex - 1
 			prevLogTerm := rf.getLogTerm(prevLogIndex)
-
-			entries := []*pb.LogEntry{}
-			// 假设一个 Follower 掉线了 1 小时，落后了 100 万条日志（几百 MB 数据）。 当它重连时，Leader 会尝试把这 100 万条日志打包进这一个 RPC 发送出去（进行改进：限制这个数量）
-			if nextIndex <= rf.getLastLogIndex() {
+			var entries []*pb.LogEntry
+			if !isHeartbeat && nextIndex <= rf.getLastLogIndex() {
 				entries = rf.getEntriesToSend(nextIndex)
 			}
 			rf.mu.Unlock()
+
 			args := pb.AppendEntriesArgs{
 				Term:         currentTerm,
 				LeaderId:     leaderID,
@@ -103,10 +106,12 @@ func (rf *Raft) sendAppendEntries() {
 				Entries:      entries,
 				LeaderCommit: leaderCommit,
 			}
+			
 			reply, ok := peer.CallAppendEntries(&args)
 			if !ok {
 				return
 			}
+
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 			if rf.killed() || rf.state != Leader || rf.currentTerm != args.Term {
@@ -114,17 +119,21 @@ func (rf *Raft) sendAppendEntries() {
 			}
 			if reply.Term > rf.currentTerm {
 				rf.becomeFollower(reply.Term)
-				tool.Log.Info("调用persist in send ")
 				rf.persist()
 				return
 			}
+			if isHeartbeat {
+				return
+			}
+
 			if reply.Success {
 				rf.matchIndex[i] = prevLogIndex + int64(len(args.Entries))
 				rf.nextIndex[i] = rf.matchIndex[i] + 1
 				rf.updateCommitIndex()
+				
 				if len(entries) == 0 {
 					heartbeatAckCount++
-					if heartbeatAckCount == rf.peers.QuorumSize() && !notified {
+					if heartbeatAckCount >= rf.peers.QuorumSize() && !notified {
 						notified = true
 						close(rf.readIndexNotifyCh)
 						rf.readIndexNotifyCh = make(chan struct{})
@@ -135,9 +144,9 @@ func (rf *Raft) sendAppendEntries() {
 					rf.nextIndex[i] = reply.ConflictIndex
 				} else {
 					var conflictIndex int64 = -1
-					for i := rf.getLastLogIndex(); i >= rf.lastIncludedIndex; i-- {
-						if rf.getLogTerm(i) == reply.ConflictTerm {
-							conflictIndex = i
+					for idx := rf.getLastLogIndex(); idx >= rf.lastIncludedIndex; idx-- {
+						if rf.getLogTerm(idx) == reply.ConflictTerm {
+							conflictIndex = idx
 							break
 						}
 					}
@@ -150,7 +159,6 @@ func (rf *Raft) sendAppendEntries() {
 			}
 		}(peer)
 	}
-
 }
 
 func (rf *Raft) sendInstallSnapshot(server int64, peer *RaftPeer) {

@@ -6,7 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
-	"sync/atomic"
+
 	"time"
 )
 
@@ -69,20 +69,6 @@ func (k *KVEngine) ApplyCommand(op string, key, value []byte, ttl int64, clientI
 	} else {
 		k.seqCache.Store(clientId, seqId)
 	}
-	if k.db.NeedFlush() {
-		if atomic.CompareAndSwapInt32(&k.isFlushing, 0, 1) {
-			go func() {
-				defer atomic.StoreInt32(&k.isFlushing, 0)
-				if err := k.db.Flush(); err != nil {
-					if err.Error() != "flush already in progress" {
-						tool.Log.Warn("BgDB Flush error", "err", err)
-					}
-				} else {
-					tool.Log.Debug("Auto Flush succeed")
-				}
-			}()
-		}
-	}
 	currentTs := k.db.CurrentTs()
 	return currentTs, nil
 }
@@ -128,8 +114,11 @@ func (k *KVEngine) IsDuplicate(clientId int64, seqId int64) bool {
 	}
 	return seqId <= lastSeq
 }
-func (k *KVEngine) GetSnapshot() ([]byte, error) {
-	return k.db.Backup()
+func (k *KVEngine) GetSnapshot(ts uint64) ([]byte, error) {
+	return k.db.BackupAt(ts)
+}
+func (db *KVEngine) CurrentTs() uint64 {
+	return db.db.CurrentTs()
 }
 
 func (k *KVEngine) RestoreSnapshot(data []byte) error {

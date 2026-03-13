@@ -662,7 +662,7 @@ func (l *LogStore) SaveSnapshot(lastTerm int64, lastIndex int64, data []byte) {
 		tool.Log.Error("Failed to sync snapshot", "err", err)
 		return
 	}
-	tool.Log.Info("succeed to write in snapshot")
+	tool.Log.Debug("succeed to write in snapshot")
 }
 
 func (l *LogStore) LoadSnapshot() (*pb.SnapshotState, []byte, bool) {

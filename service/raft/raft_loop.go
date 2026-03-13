@@ -8,31 +8,6 @@ import (
 	"time"
 )
 
-func (rf *Raft) ticker() {
-	for !rf.killed() {
-		select {
-		case <-rf.electionCh:
-			rf.mu.Lock()
-			isStaleSignal := time.Since(rf.lastResetElectionTime) < 500*time.Millisecond
-			
-			isLeader := rf.state == Leader
-			rf.mu.Unlock()
-			if !isLeader && !isStaleSignal {
-				tool.Log.Info("Start to a new elecion", "id", rf.me)
-				go rf.sendRequestVote()
-			}
-		case <-rf.heartbeatCh:
-			rf.mu.Lock()
-			isLeader := rf.state == Leader
-			rf.mu.Unlock()
-			if isLeader {
-				go rf.sendAppendEntries()
-			}
-		case <-rf.shutdownCh:
-			return
-		}
-	}
-}
 
 func (rf *Raft) electionTimer() {
 	timer := time.NewTimer(RandomElectionTimeout())
@@ -65,61 +40,79 @@ func (rf *Raft) electionTimer() {
 	}
 }
 func (rf *Raft) heartbeatTimer() {
-    // 1. 定义心跳定时器 (保底机制，没数据也要发)
-    timer := time.NewTicker(StableHeartbeatTimeout())
+    timer := time.NewTicker(StableHeartbeatTimeout()) // 每 100ms 滴答一次
     defer timer.Stop()
 
-    // 2. 定义批处理等待时间 (缓冲机制，有数据攒一攒再发)
-    // 15ms 是一个经验值，既能攒批，又不会让延迟太高
     const BatchDuration = 15 * time.Millisecond
-    
-    // 用于标记是否需要立即触发发送
-    needSend := false
+    needSendData := false
 
     for !rf.killed() {
         select {
         case <-timer.C:
-            // 时间到了，必须发送心跳保活
-            needSend = true
+            rf.mu.Lock()
+            isLeader := rf.state == Leader
+            rf.mu.Unlock()
+            if isLeader {
+                // 🚨 走纯心跳通道，0字节负荷，绝对不堵车
+                go rf.sendAppendEntries(true)
+            }
 
         case <-rf.sendHeartbeatAtOnceCh:
             batchTimer := time.NewTimer(BatchDuration)
-            
         DrainLoop:
             for {
                 select {
                 case <-rf.sendHeartbeatAtOnceCh:
-                    // 又有新 Propose？太好了，合并！继续等。
                 case <-batchTimer.C:
-                    // 15ms 到了，不再等了
                     break DrainLoop
                 case <-rf.shutdownCh:
                     batchTimer.Stop()
                     return
                 }
             }
-            // 标记需要发送
-            needSend = true
+            needSendData = true
             
         case <-rf.shutdownCh:
             return
         }
 
-        // 统一执行发送逻辑
-        if needSend {
+        if needSendData {
             rf.mu.Lock()
             isLeader := rf.state == Leader
             rf.mu.Unlock()
-            
             if isLeader {
-                // 注意：这里不要用 go rf.sendAppendEntries()
-                // 直接调用，或者用一个单独的 worker pool
-                // 为了防止阻塞 timer，这里用 go 是可以的，但最好限制并发
-                go rf.sendAppendEntries()
+                // 🚨 走数据同步通道
+                go rf.sendAppendEntries(false)
             }
-            needSend = false
+            needSendData = false
         }
     }
+}
+
+func (rf *Raft) ticker() {
+	for !rf.killed() {
+		select {
+		case <-rf.electionCh:
+			rf.mu.Lock()
+			isStaleSignal := time.Since(rf.lastResetElectionTime) < 500*time.Millisecond
+			isLeader := rf.state == Leader
+			rf.mu.Unlock()
+			
+			if !isLeader && !isStaleSignal {
+				tool.Log.Info("Start to a new elecion", "id", rf.me)
+				go rf.sendRequestVote()
+			}
+		case <-rf.heartbeatCh: // 兼容你之前的信号
+			rf.mu.Lock()
+			isLeader := rf.state == Leader
+			rf.mu.Unlock()
+			if isLeader {
+				go rf.sendAppendEntries(false)
+			}
+		case <-rf.shutdownCh:
+			return
+		}
+	}
 }
 func (rf *Raft) resetElectionTimer() {
 	select {
