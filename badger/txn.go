@@ -2,6 +2,7 @@ package badger
 
 import (
 	"RaftKV/badger/skl"
+	"RaftKV/badger/table"
 	"RaftKV/badger/y"
 	"RaftKV/tool"
 	"bytes"
@@ -246,6 +247,15 @@ func (txn *Txn) Get(key []byte) (*Item, error) {
 					}
 					if vs.Meta&y.BitValuePointer > 0 {
 						res.vptr = y.SafeCopy(nil, vs.UserValue)
+						vp := DecodeValuePointer(res.vptr)
+						if vp != nil{
+							realVal,err := txn.db.vlog.Read(vp)
+							if err == nil{
+								res.val = realVal
+							}else{
+								tool.Log.Error("Failed to read from vlog in checkMem","err",err)
+							}
+						}
 					} else {
 						res.val = y.SafeCopy(nil, vs.UserValue)
 					}
@@ -262,17 +272,34 @@ func (txn *Txn) Get(key []byte) (*Item, error) {
 	}
 
 	txn.db.mu.RLock()
-	defer txn.db.mu.RUnlock()
-
-	if item, err := checkMem(txn.db.skl); err == nil {
+	activeMem := txn.db.skl
+	immMem := txn.db.immSkl
+	var searchLevels [][]*table.Table
+	for _,tables := range txn.db.levelTables{
+		var level []*table.Table
+		for _,t := range tables{
+			t.IncrRef()
+			level = append(level, t)
+		}
+		searchLevels = append(searchLevels, level)
+	}
+	txn.db.mu.RUnlock()
+	defer func() {
+		for _, tables := range searchLevels {
+			for _, t := range tables {
+				t.DecrRef()
+			}
+		}
+	}()
+	if item, err := checkMem(activeMem); err == nil {
 		return item, nil
 	}
 	if txn.db.immSkl != nil {
-		if item, err := checkMem(txn.db.immSkl); err == nil {
+		if item, err := checkMem(immMem); err == nil {
 			return item, nil
 		}
 	}
-	for _, tables := range txn.db.levelTables {
+	for _, tables := range searchLevels {
 		for i := 0; i < len(tables); i++ {
 			val, meta, ts, err := tables[i].Get(key, txn.readTs)
 			if err == nil {
@@ -297,6 +324,15 @@ func (txn *Txn) Get(key []byte) (*Item, error) {
 				// 根据解码后的 Meta 正确分发数据或 Vlog 指针
 				if vs.Meta&y.BitValuePointer > 0 {
 					res.vptr = y.SafeCopy(nil, vs.UserValue)
+					vp := DecodeValuePointer(res.vptr)
+					if vp != nil {
+						realVal, err := txn.db.vlog.Read(vp)
+						if err == nil {
+							res.val = realVal
+						} else {
+							tool.Log.Error("Failed to read from vlog", "err", err)
+						}
+					}
 				} else {
 					res.val = y.SafeCopy(nil, vs.UserValue)
 				}

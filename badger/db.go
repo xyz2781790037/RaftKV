@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -40,110 +41,12 @@ type DB struct {
 	manifest    *Manifest
 	orc         *oracle
 	lc          *LevelsController
+	opt         Options
+	flushCond   *sync.Cond
 }
 
-// func Open(dir string) (*DB, error) {
-// 	if err := os.MkdirAll(dir, 0755); err != nil {
-// 		return nil, err
-// 	}
-// 	manifest, err := OpenManifest(dir)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	nextFid, levelFIDs := manifest.GetState()
-
-// 	walPath := filepath.Join(dir, "minibadger.wal")
-// 	wal, err := OpenWAL(walPath)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	vlogOpt := Options{ValueLogFileSize: MaxVLogFileSize}
-// 	vlog, err := OpenValueLog(dir, vlogOpt)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	levels := make([][]*table.Table, MaxLevels)
-// 	for levelNum, fids := range levelFIDs {
-// 		for _, fid := range fids {
-// 			sstName := filepath.Join(dir, fmt.Sprintf("%06d.sst", fid))
-// 			t, err := table.OpenTable(sstName)
-// 			if err != nil {
-// 				return nil, err
-// 			}
-// 			levels[levelNum] = append(levels[levelNum], t)
-// 		}
-// 	}
-// 	sl := skl.NewSkiplist()
-// 	bakPath := filepath.Join(dir, "minibadger.wal.bak")
-// 	if _, err := os.Stat(bakPath); err == nil {
-// 		tool.Log.Info("Found .bak WAL, recovering data...", "path", bakPath)
-// 		bakWal, err := OpenWAL(bakPath)
-// 		if err == nil {
-// 			entries, err := bakWal.ReadWAL()
-// 			if err == nil {
-// 				for _, e := range entries {
-// 					sl.Put(e)
-// 				}
-// 			}
-// 			bakWal.Close()
-// 			// 恢复后不做删除，留给下次 Flush 处理，或者你可以选择现在 os.Remove(bakPath)
-// 		}
-// 	}
-// 	entries, err := wal.ReadWAL()
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	// for _, e := range entries {
-// 	// 	sl.Put(e)
-// 	// }
-// 	var maxWalTs uint64 = 0
-// 	for _, e := range entries {
-// 		ts := y.ParseTs(e.Key)
-// 		if ts > maxWalTs {
-// 			maxWalTs = ts
-// 		}
-// 		sl.Put(e)
-// 	}
-// 	db := &DB{
-// 		skl:         sl,
-// 		immSkl:      nil, // 初始为空
-// 		wal:         wal,
-// 		vlog:        vlog,
-// 		levelTables: levels,
-// 		manifest:    manifest,
-// 		orc:         newOracle(),
-// 	}
-// 	db.lc = NewLevelsController(db)
-// 	maxTs := manifest.GetMaxTs()
-// 	finalTs := maxTs
-// 	if maxWalTs > finalTs {
-// 		finalTs = maxWalTs
-// 	}
-// 	if finalTs > 0 {
-// 		db.orc.nextTxnTs = finalTs + 1
-// 		tool.Log.Info("成功从 Manifest 恢复时间戳", "nextTxnTs", db.orc.nextTxnTs)
-// 	}
-// 	db.nextFileID.Store(nextFid)
-// 	go func() {
-// 		for {
-// 			if db.isClosed.Load() == 1 {
-// 				return
-// 			}
-// 			cd := db.lc.PickCompactionTask()
-
-// 			if cd != nil {
-// 				if err := db.lc.RunCompaction(cd); err != nil {
-// 					tool.Log.Error("后台合并任务执行失败", "err", err)
-// 				}
-// 			} else {
-// 				time.Sleep(100 * time.Millisecond)
-// 			}
-// 		}
-// 	}()
-// 	return db, nil
-// }
-func Open(dir string) (*DB, error) {
+func Open(opt Options) (*DB, error) {
+	dir := opt.Dir
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
@@ -159,7 +62,7 @@ func Open(dir string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	vlogOpt := Options{ValueLogFileSize: MaxVLogFileSize}
+	vlogOpt := DefaultOptions(dir)
 	vlog, err := OpenValueLog(dir, vlogOpt)
 	if err != nil {
 		return nil, err
@@ -176,7 +79,6 @@ func Open(dir string) (*DB, error) {
 		}
 	}
 
-	// 🚨 核心修复 2：将 DB 实例的构建提前，使其在恢复期间就能调用 db.Flush()
 	db := &DB{
 		skl:         skl.NewSkiplist(),
 		immSkl:      nil,
@@ -188,7 +90,7 @@ func Open(dir string) (*DB, error) {
 	}
 	db.lc = NewLevelsController(db)
 	db.nextFileID.Store(nextFid)
-
+	db.flushCond = sync.NewCond(&db.mu)
 	bakPath := filepath.Join(dir, "minibadger.wal.bak")
 	if _, err := os.Stat(bakPath); err == nil {
 		tool.Log.Info("Found .bak WAL, recovering data...", "path", bakPath)
@@ -219,7 +121,6 @@ func Open(dir string) (*DB, error) {
 			maxWalTs = ts
 		}
 		db.skl.Put(e)
-		// 🚨 核心修复 3：重放 WAL 时实行水位控制，满则落盘！
 		if db.skl.SklSize() >= MemTableEntryLimit {
 			_ = db.Flush()
 		}
@@ -248,6 +149,23 @@ func Open(dir string) (*DB, error) {
 				}
 			} else {
 				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if db.isClosed.Load() == 1 {
+					return
+				}
+				for {
+					if err := db.RunValueLogGC(); err != nil {
+						break
+					}
+				}
 			}
 		}
 	}()
@@ -294,6 +212,7 @@ func (db *DB) Delete(key []byte) error {
 		return txn.Delete(key)
 	})
 }
+
 func (db *DB) BatchSet(entries []*skl.Entry) error {
 	if err := db.checkClosed(); err != nil {
 		return err
@@ -301,7 +220,7 @@ func (db *DB) BatchSet(entries []*skl.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	tool.Log.Debug("[Trace-3] 引擎开始落盘", "entries_count", len(entries))
+	var wroteToVlog bool
 	for _, e := range entries {
 		if len(e.Value) > ValueThreshold && e.Meta != skl.BitDelete {
 			ptr, err := db.vlog.Write(e.Key, e.Value)
@@ -309,37 +228,57 @@ func (db *DB) BatchSet(entries []*skl.Entry) error {
 				return err
 			}
 			e.Value = EncodeValuePointer(ptr)
-			e.Meta |= skl.BitValuePointer
+			e.Meta |= y.BitValuePointer
+			wroteToVlog = true
 		}
 	}
-	for {
-		db.mu.RLock()
-		needFlush := db.skl.SklSize() >= MemTableEntryLimit
-		hasImm := db.immSkl != nil
-		db.mu.RUnlock()
+	if wroteToVlog {
+		if db.opt.SyncWrites {
+			if err := db.vlog.Sync(); err != nil {
+				return err
+			}
+		}
+	}
 
-		if needFlush && hasImm {
-			time.Sleep(10 * time.Millisecond) // 等待后台 Flush 腾出空间
-			continue
-		}
-		break
-	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	for db.skl.SklSize() >= MemTableEntryLimit {
+		if db.immSkl != nil {
+			db.flushCond.Wait()
+		} else {
+			if err := db.wal.Close(); err != nil {
+				return err
+			}
+			walPath := db.wal.path
+			bakPath := walPath + ".bak"
+			os.Rename(walPath, bakPath)
+
+			newWal, err := OpenWAL(walPath)
+			if err != nil {
+				os.Rename(bakPath, walPath)
+				return err
+			}
+			db.wal = newWal
+
+			db.immSkl = db.skl
+			db.skl = skl.NewSkiplist()
+
+			go db.doFlushTask(db.immSkl, bakPath)
+		}
+	}
 
 	if err := db.wal.WriteBatch(entries); err != nil {
-		tool.Log.Debug("BatchSet fail")
 		return err
 	}
 	for _, e := range entries {
 		db.skl.Put(e)
 	}
-	tool.Log.Debug("BatchSet 完成", "Count", len(entries), "CurrentSklSize", db.skl.SklSize())
+
 	return nil
 }
 
 func (db *DB) Get(key []byte) ([]byte, error) {
-	tool.Log.Debug("🔍 [Trace-4] 开始 Get 查询", "key", string(key))
+	tool.Log.Debug("4开始 Get 查询", "key", string(key))
 	var val []byte
 	err := db.View(
 		func(txn *Txn) error {
@@ -394,10 +333,12 @@ func (db *DB) Close() error {
 	currentTs := db.orc.readTs()
 	_ = db.manifest.SetMaxTs(currentTs)
 	db.wal.Close()
-	db.vlog.Close()
+	if db.vlog != nil {
+		db.vlog.Close()
+	}
 	for _, tt := range db.levelTables {
 		for _, t := range tt {
-			t.Close()
+			t.DecrRef()
 		}
 	}
 	return nil
@@ -407,145 +348,69 @@ func (db *DB) Sync() error {
 	return db.wal.Sync()
 }
 
-func (db *DB) Backup() ([]byte, error) {
+func (db *DB) BackupAt(ts uint64) ([]byte, error) {
 	if err := db.checkClosed(); err != nil {
 		return nil, err
 	}
-	db.mu.RLock()
-	defer db.mu.RUnlock()
 
-	buf := bytes.NewBuffer(make([]byte, 0, 4*db.skl.SklSize()))
+	buf := bytes.NewBuffer(make([]byte, 0, 10*1024*1024))
 	headerBuf := make([]byte, maxHeaderSize)
+	err := db.View(func(txn *Txn) error {
+		txn.readTs = ts
 
-	writeEntry := func(key, value []byte, meta byte, expiresAt uint64) bool {
-		vs := y.ValueStruct{
-			Meta:      meta, 
-			UserValue: value, 
-			ExpiresAt: expiresAt,
-		}
-		encodedVal := make([]byte, vs.EncodedSize())
-		vs.Encode(encodedVal)
-		h := skl.EntryHeader{
-			Meta:     meta,
-			KeyLen:   uint32(len(key)),
-			ValueLen: uint32(len(value)),
-		}
-		n := h.Encode(headerBuf)
-		buf.Write(headerBuf[:n])
-		buf.Write(key)
-		buf.Write(value)
-		return true
-	}
-	for i := MaxLevels - 1; i >= 0; i-- {
-		for j := len(db.levelTables[i]) - 1; j >= 0; j-- {
-			if err := db.levelTables[i][j].Scan(writeEntry); err != nil {
-				return nil, err
+		it := txn.NewIterator(DefaultIteratorOptions)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			val, err := item.ValueCopy(nil)
+			if err != nil {
+				continue
 			}
+			cleanMeta := item.Meta() &^ y.BitValuePointer
+
+			vs := y.ValueStruct{
+				Meta:      cleanMeta,
+				UserValue: val,
+				ExpiresAt: item.ExpiresAt(),
+			}
+
+			encodedVal := make([]byte, vs.EncodedSize())
+			vs.Encode(encodedVal)
+
+			h := skl.EntryHeader{
+				Meta:     cleanMeta,
+				KeyLen:   uint32(len(item.Key())),
+				ValueLen: uint32(len(encodedVal)),
+			}
+			n := h.Encode(headerBuf)
+			buf.Write(headerBuf[:n])
+			buf.Write(item.Key())
+			buf.Write(encodedVal)
 		}
-	}
-
-	if db.immSkl != nil {
-		db.immSkl.Scan(func(e *skl.Entry) bool {
-			return writeEntry(e.Key, e.Value, e.Meta,e.ExpiresAt)
-		})
-	}
-
-	db.skl.Scan(func(e *skl.Entry) bool {
-		return writeEntry(e.Key, e.Value, e.Meta,e.ExpiresAt)
+		return nil
 	})
 
-	return buf.Bytes(), nil
+	return buf.Bytes(), err
 }
 
-// func (db *DB) LoadFrom(data []byte) error {
-// 	if err := db.checkClosed(); err != nil {
-// 		return err
-// 	}
-// 	db.mu.Lock()
-// 	defer db.mu.Unlock()
-// 	if err := db.manifest.RevertToSnapshot(); err != nil {
-// 		return err
-// 	}
-// 	for _, tt := range db.levelTables {
-// 		for _, t := range tt {
-// 			t.Close()
-// 			os.Remove(t.Fd().Name())
-// 		}
-// 	}
-// 	db.levelTables = make([][]*table.Table, MaxLevels)
-// 	db.nextFileID.Store(0)
-// 	db.wal.Close()
-// 	os.Truncate(db.wal.path, 0)
-// 	newWal, err := OpenWAL(db.wal.path)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	db.wal = newWal
-
-// 	db.skl = skl.NewSkiplist()
-// 	db.immSkl = nil
-
-// 	if len(data) == 0 {
-// 		return nil
-// 	}
-
-// 	offset := 0
-// 	var batch []*skl.Entry
-
-// 	for offset < len(data) {
-// 		header, n := skl.DecodeHeader(data[offset:])
-// 		if header == nil || n == 0 {
-// 			return fmt.Errorf("corrupted snapshot")
-// 		}
-// 		offset += n
-
-// 		key := make([]byte, header.KeyLen)
-// 		copy(key, data[offset:offset+int(header.KeyLen)])
-// 		offset += int(header.KeyLen)
-
-// 		val := make([]byte, header.ValueLen)
-// 		copy(val, data[offset:offset+int(header.ValueLen)])
-// 		offset += int(header.ValueLen)
-
-// 		entry := skl.NewEntry(key, val)
-// 		entry.Meta = header.Meta
-// 		batch = append(batch, entry)
-
-//			if len(batch) >= 1000 {
-//				if err := db.wal.WriteBatch(batch); err != nil {
-//					return err
-//				}
-//				for _, e := range batch {
-//					db.skl.Put(e)
-//				}
-//				batch = batch[:0]
-//			}
-//		}
-//		if len(batch) > 0 {
-//			db.wal.WriteBatch(batch)
-//			for _, e := range batch {
-//				db.skl.Put(e)
-//			}
-//		}
-//		return nil
-//	}
 func (db *DB) LoadFrom(data []byte) error {
 	if err := db.checkClosed(); err != nil {
 		return err
 	}
 
-	// 1. 初始环境清理（只需在重置元数据时加锁）
 	db.mu.Lock()
 	if err := db.manifest.RevertToSnapshot(); err != nil {
 		db.mu.Unlock()
 		return err
 	}
+
 	for _, tt := range db.levelTables {
 		for _, t := range tt {
-			t.Close()
-			os.Remove(t.Fd().Name())
+			t.MarkDelete()
 		}
 	}
+
 	db.levelTables = make([][]*table.Table, MaxLevels)
 	db.nextFileID.Store(0)
 	db.wal.Close()
@@ -567,7 +432,6 @@ func (db *DB) LoadFrom(data []byte) error {
 	offset := 0
 	var batch []*skl.Entry
 
-	// 2. 批量回放与写入（按批次加锁）
 	for offset < len(data) {
 		header, n := skl.DecodeHeader(data[offset:])
 		if header == nil || n == 0 {
@@ -585,9 +449,9 @@ func (db *DB) LoadFrom(data []byte) error {
 		var vs y.ValueStruct
 		vs.Decode(val)
 
-		entry := skl.NewEntry(key,vs.UserValue)
+		entry := skl.NewEntry(key, vs.UserValue)
 		entry.Meta = header.Meta
-		entry.ExpiresAt = vs.ExpiresAt 
+		entry.ExpiresAt = vs.ExpiresAt
 		batch = append(batch, entry)
 
 		if len(batch) >= 1000 {
@@ -602,7 +466,6 @@ func (db *DB) LoadFrom(data []byte) error {
 			needFlush := db.skl.SklSize() > MemTableEntryLimit
 			db.mu.Unlock()
 
-			// 🚨 核心修复：如果内存表满了，由于当前没有持有大锁，可以安全地触发同步 Flush 防止 OOM
 			if needFlush {
 				if err := db.Flush(); err != nil && err.Error() != "flush already in progress" {
 					tool.Log.Error("LoadFrom 期间 Flush 失败", "err", err)
@@ -630,7 +493,6 @@ func (db *DB) Flush() error {
 		db.mu.Unlock()
 		return nil
 	}
-
 	if db.immSkl != nil {
 		db.mu.Unlock()
 		return fmt.Errorf("flush already in progress")
@@ -652,7 +514,7 @@ func (db *DB) Flush() error {
 	newWal, err := OpenWAL(walPath)
 	if err != nil {
 		db.mu.Unlock()
-		os.Rename(bakPath, walPath) // 失敗回滾
+		os.Rename(bakPath, walPath) // 失败回滚
 		return err
 	}
 	db.wal = newWal
@@ -660,6 +522,15 @@ func (db *DB) Flush() error {
 	db.immSkl = db.skl
 	db.skl = skl.NewSkiplist()
 	db.mu.Unlock()
+
+	// 🚨 核心防死锁机制：确保退出前必定释放 immSkl 并唤醒前台
+	defer func() {
+		db.mu.Lock()
+		db.immSkl = nil
+		db.flushCond.Broadcast()
+		db.mu.Unlock()
+	}()
+
 	fid := db.manifest.AllocFileID()
 	sstName := filepath.Join(db.manifest.dirPath, fmt.Sprintf("%06d.sst", fid))
 
@@ -686,21 +557,75 @@ func (db *DB) Flush() error {
 	if err != nil {
 		return err
 	}
+
 	db.mu.Lock()
-	defer db.mu.Unlock()
 	newL0 := make([]*table.Table, 0, len(db.levelTables[0])+1)
 	newL0 = append(newL0, t)
 	newL0 = append(newL0, db.levelTables[0]...)
 	db.levelTables[0] = newL0
-	db.immSkl = nil
+	db.mu.Unlock()
+
 	if err := db.manifest.AddTableToL0(uint32(fid)); err != nil {
 		t.Close()
 		return fmt.Errorf("failed to update manifest: %v", err)
 	}
 	_ = db.manifest.SetMaxTs(db.orc.readTs())
-
 	os.Remove(bakPath)
+
 	return nil
+}
+
+func (db *DB) doFlushTask(imm *skl.SkipList, bakWal string) {
+	defer func() {
+		db.mu.Lock()
+		db.immSkl = nil
+		db.flushCond.Broadcast()
+		db.mu.Unlock()
+	}()
+
+	fid := db.manifest.AllocFileID()
+	sstName := filepath.Join(db.manifest.dirPath, fmt.Sprintf("%06d.sst", fid))
+
+	builder, err := table.NewBuilder(sstName)
+	if err != nil {
+		tool.Log.Error("Builder failed", "err", err)
+		return
+	}
+
+	imm.Scan(func(e *skl.Entry) bool {
+		vs := y.ValueStruct{
+			Meta:      e.Meta,
+			UserValue: e.Value,
+			ExpiresAt: e.ExpiresAt,
+		}
+		builder.Add(e.Key, vs)
+		return true
+	})
+
+	if err := builder.Finish(); err != nil {
+		tool.Log.Error("Builder Finish failed", "err", err)
+		return
+	}
+
+	t, err := table.OpenTable(sstName)
+	if err != nil {
+		tool.Log.Error("OpenTable failed", "err", err)
+		return
+	}
+
+	db.mu.Lock()
+	newL0 := make([]*table.Table, 0, len(db.levelTables[0])+1)
+	newL0 = append(newL0, t)
+	newL0 = append(newL0, db.levelTables[0]...)
+	db.levelTables[0] = newL0
+	db.mu.Unlock()
+
+	if err := db.manifest.AddTableToL0(uint32(fid)); err != nil {
+		t.Close()
+		return
+	}
+	_ = db.manifest.SetMaxTs(db.orc.readTs())
+	os.Remove(bakWal)
 }
 
 const MemTableEntryLimit = 40000
@@ -729,4 +654,85 @@ func (db *DB) NewIterators(reverse bool) []y.Iterator {
 }
 func (db *DB) CurrentTs() uint64 {
 	return db.orc.readTs()
+}
+
+// RunValueLogGC 执行垃圾回收
+func (db *DB) RunValueLogGC() error {
+	if err := db.checkClosed(); err != nil {
+		return err
+	}
+
+	fid, lf, err := db.vlog.pickLogToGC()
+	if err != nil {
+		return err
+	}
+
+	var wb []*skl.Entry
+	var offset int64 = 0
+	var reuseBuf []byte
+
+	for {
+		e, vp, nextOffset, buf, err := db.vlog.readEntryFrom(lf, offset, reuseBuf)
+		reuseBuf = buf
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		vp.Fid = fid
+
+		userKey := y.ParseKey(e.Key)
+		readTs := y.ParseTs(e.Key)
+
+		_ = db.View(func(txn *Txn) error {
+			item, err := txn.Get(userKey)
+			if err != nil {
+				return nil
+			}
+			if item.version != readTs {
+				return nil
+			}
+			if item.meta&y.BitDelete > 0 || (item.expiresAt > 0 && uint64(time.Now().Unix()) > item.expiresAt) {
+				return nil
+			}
+			if item.meta&y.BitValuePointer == 0 {
+				return nil
+			}
+
+			currentVp := DecodeValuePointer(item.vptr)
+			if currentVp != nil && currentVp.Fid == fid && currentVp.Offset == vp.Offset {
+				cleanMeta := e.Meta &^ y.BitValuePointer
+				ne := &skl.Entry{
+					Key:       userKey,
+					Value:     e.Value,
+					Meta:      cleanMeta,
+					ExpiresAt: item.expiresAt,
+				}
+				wb = append(wb, ne)
+			}
+			return nil
+		})
+
+		if len(wb) >= 1000 {
+			_ = db.Update(func(txn *Txn) error {
+				for _, entry := range wb {
+					txn.pendingWrites[string(entry.Key)] = entry
+				}
+				return nil
+			})
+			wb = wb[:0]
+		}
+		offset = nextOffset
+	}
+
+	if len(wb) > 0 {
+		_ = db.Update(func(txn *Txn) error {
+			for _, entry := range wb {
+				txn.pendingWrites[string(entry.Key)] = entry
+			}
+			return nil
+		})
+	}
+	return db.vlog.deleteLogFile(fid)
 }

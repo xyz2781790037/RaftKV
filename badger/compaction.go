@@ -5,7 +5,7 @@ import (
 	"RaftKV/badger/y"
 	"bytes"
 	"fmt"
-	"os"
+	// "os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -119,24 +119,19 @@ func (lc *LevelsController) RunCompaction(cd *CompactDef) error {
 	return lc.commitCompaction(cd, newTables)
 }
 
-// commitCompaction 原子地更新内存与 Manifest，并清理废弃文件
 func (lc *LevelsController) commitCompaction(cd *CompactDef, newTables []*table.Table) error {
 	lc.db.mu.Lock()
 	defer lc.db.mu.Unlock()
 
-	// 1. 从内存中的层级表中剔除旧文件
 	lc.db.levelTables[cd.ThisLevel] = removeTables(lc.db.levelTables[cd.ThisLevel], cd.Top)
 	lc.db.levelTables[cd.NextLevel] = removeTables(lc.db.levelTables[cd.NextLevel], cd.Bot)
 
-	// 2. 将生成的新文件挂载到目标层
 	lc.db.levelTables[cd.NextLevel] = append(lc.db.levelTables[cd.NextLevel], newTables...)
 
-	// 3. 保证目标层有序 (L1~L6 的 SSTable 必须严格按照 Key 排序)
 	sort.Slice(lc.db.levelTables[cd.NextLevel], func(i, j int) bool {
 		return y.CompareKeys(lc.db.levelTables[cd.NextLevel][i].Smallest(), lc.db.levelTables[cd.NextLevel][j].Smallest()) < 0
 	})
 
-	// 4. 更新 Manifest 元数据文件
 	thisLevelFids := getTableFIDs(lc.db.levelTables[cd.ThisLevel])
 	if err := lc.db.manifest.ReplaceLevelFIDs(cd.ThisLevel, thisLevelFids); err != nil {
 		return err
@@ -147,22 +142,16 @@ func (lc *LevelsController) commitCompaction(cd *CompactDef, newTables []*table.
 		return err
 	}
 
-	// 5. 异步物理删除旧文件，避免阻塞 DB 锁
-	go func() {
-		for _, t := range cd.Top {
-			t.Close()
-			os.Remove(t.Fd().Name())
-		}
-		for _, t := range cd.Bot {
-			t.Close()
-			os.Remove(t.Fd().Name())
-		}
-	}()
+	for _, t := range cd.Top {
+		t.MarkDelete()
+	}
+	for _, t := range cd.Bot {
+		t.MarkDelete()
+	}
 
 	return nil
 }
-
-// removeTables 辅助函数：根据 FID 集合对源数组进行过滤删除
+// removeTables 根据 FID 集合对源数组进行过滤删除
 func removeTables(src []*table.Table, toRemove []*table.Table) []*table.Table {
 	removeMap := make(map[uint32]struct{}, len(toRemove))
 	for _, t := range toRemove {
@@ -177,7 +166,7 @@ func removeTables(src []*table.Table, toRemove []*table.Table) []*table.Table {
 	return res
 }
 
-// getTableFIDs 辅助函数：提取数组中所有 Table 的 FID
+// getTableFIDs 提取数组中所有 Table 的 FID
 func getTableFIDs(tables []*table.Table) []uint32 {
 	fids := make([]uint32, 0, len(tables))
 	for _, t := range tables {
