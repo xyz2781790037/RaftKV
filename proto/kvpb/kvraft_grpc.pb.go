@@ -22,6 +22,7 @@ const (
 	RaftKV_Get_FullMethodName       = "/kvraft.RaftKV/Get"
 	RaftKV_PutAppend_FullMethodName = "/kvraft.RaftKV/PutAppend"
 	RaftKV_BatchGet_FullMethodName  = "/kvraft.RaftKV/BatchGet"
+	RaftKV_Watch_FullMethodName     = "/kvraft.RaftKV/Watch"
 )
 
 // RaftKVClient is the client API for RaftKV service.
@@ -31,6 +32,7 @@ type RaftKVClient interface {
 	Get(ctx context.Context, in *GetArgs, opts ...grpc.CallOption) (*GetReply, error)
 	PutAppend(ctx context.Context, in *PutAppendArgs, opts ...grpc.CallOption) (*PutAppendReply, error)
 	BatchGet(ctx context.Context, in *BatchGetArgs, opts ...grpc.CallOption) (*BatchGetReply, error)
+	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 }
 
 type raftKVClient struct {
@@ -71,6 +73,25 @@ func (c *raftKVClient) BatchGet(ctx context.Context, in *BatchGetArgs, opts ...g
 	return out, nil
 }
 
+func (c *raftKVClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &RaftKV_ServiceDesc.Streams[0], RaftKV_Watch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRequest, WatchResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RaftKV_WatchClient = grpc.ServerStreamingClient[WatchResponse]
+
 // RaftKVServer is the server API for RaftKV service.
 // All implementations must embed UnimplementedRaftKVServer
 // for forward compatibility.
@@ -78,6 +99,7 @@ type RaftKVServer interface {
 	Get(context.Context, *GetArgs) (*GetReply, error)
 	PutAppend(context.Context, *PutAppendArgs) (*PutAppendReply, error)
 	BatchGet(context.Context, *BatchGetArgs) (*BatchGetReply, error)
+	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	mustEmbedUnimplementedRaftKVServer()
 }
 
@@ -96,6 +118,9 @@ func (UnimplementedRaftKVServer) PutAppend(context.Context, *PutAppendArgs) (*Pu
 }
 func (UnimplementedRaftKVServer) BatchGet(context.Context, *BatchGetArgs) (*BatchGetReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method BatchGet not implemented")
+}
+func (UnimplementedRaftKVServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error {
+	return status.Error(codes.Unimplemented, "method Watch not implemented")
 }
 func (UnimplementedRaftKVServer) mustEmbedUnimplementedRaftKVServer() {}
 func (UnimplementedRaftKVServer) testEmbeddedByValue()                {}
@@ -172,6 +197,17 @@ func _RaftKV_BatchGet_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RaftKV_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(RaftKVServer).Watch(m, &grpc.GenericServerStream[WatchRequest, WatchResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RaftKV_WatchServer = grpc.ServerStreamingServer[WatchResponse]
+
 // RaftKV_ServiceDesc is the grpc.ServiceDesc for RaftKV service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -192,6 +228,12 @@ var RaftKV_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _RaftKV_BatchGet_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Watch",
+			Handler:       _RaftKV_Watch_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "kvraft.proto",
 }

@@ -54,8 +54,18 @@ message BatchGetReply {
     map<string, string> Values = 1;  // Key -> Value 映射
     Error Err = 2;
 }
+message WatchRequest {
+    string key = 1;
+}
+
+message WatchResponse {
+    string op = 1;
+    string key = 2;
+    string value = 3;
+}
 service RaftKV {
     rpc Get(GetArgs) returns (GetReply);
     rpc PutAppend(PutAppendArgs) returns (PutAppendReply);
     rpc BatchGet(BatchGetArgs) returns (BatchGetReply);
+    rpc Watch(WatchRequest) returns (stream WatchResponse);
 }
