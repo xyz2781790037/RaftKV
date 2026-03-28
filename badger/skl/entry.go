@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"time"
 )
+
 const (
 	MaxBatchSize         = 1 << 20
 	EntryHeaderSize      = 21
@@ -88,10 +89,10 @@ func (e *Entry) WithMeta(meta byte) *Entry {
 	return e
 }
 func (e *Entry) WithTTL(dur time.Duration) *Entry {
-	if dur > 0{
+	if dur > 0 {
 		e.ExpiresAt = uint64(time.Now().Add(dur).Unix())
 		e.Meta |= y.BitHasTTL
-	}else{
+	} else {
 		e.ExpiresAt = 0
 		e.Meta &= ^y.BitHasTTL
 	}

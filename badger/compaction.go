@@ -31,9 +31,8 @@ func (lc *LevelsController) RunCompaction(cd *CompactDef) error {
 	}
 
 	mergeIter := table.NewMergeIterator(iters, false)
-	defer mergeIter.Close() // 保证退出时释放底层文件句柄
+	defer mergeIter.Close()
 
-	// 2. 准备构建环境
 	targetFileSize := lc.levelTargets().fileSz[cd.NextLevel]
 	var newTables []*table.Table
 	var currentBuilder *table.Builder
@@ -45,8 +44,6 @@ func (lc *LevelsController) RunCompaction(cd *CompactDef) error {
 		currentSstName = filepath.Join(lc.db.manifest.dirPath, fmt.Sprintf("%06d.sst", newFid))
 		return table.NewBuilder(currentSstName)
 	}
-
-	// 🚨 修复核心：新增 lastKey 用于防止同 Key 切分，新增 discardTs 用于垃圾回收
 	var lastKey []byte
 	var hasValidVersionBelowThreshold bool
 	discardTs := lc.db.CurrentTs()
@@ -57,8 +54,6 @@ func (lc *LevelsController) RunCompaction(cd *CompactDef) error {
 
 		userKey := y.ParseKey(key)
 		ts := y.ParseTs(key)
-
-		// 🚨 只有遇到全新的 Key 时，才允许检查是否达到容量并切分新文件！
 		if !bytes.Equal(userKey, lastKey) {
 			if currentBuilder != nil && currentBuilder.ReachedCapacity(targetFileSize) {
 				if err := currentBuilder.Finish(); err != nil {
@@ -74,8 +69,6 @@ func (lc *LevelsController) RunCompaction(cd *CompactDef) error {
 			lastKey = append(lastKey[:0], userKey...)
 			hasValidVersionBelowThreshold = false
 		}
-
-		// MVCC 垃圾回收：丢弃已被覆盖的旧版本
 		if ts <= discardTs {
 			if hasValidVersionBelowThreshold {
 				continue
@@ -103,7 +96,6 @@ func (lc *LevelsController) RunCompaction(cd *CompactDef) error {
 		}
 	}
 
-	// 扫尾：处理残留数据
 	if currentBuilder != nil {
 		if err := currentBuilder.Finish(); err != nil {
 			return err
@@ -115,7 +107,6 @@ func (lc *LevelsController) RunCompaction(cd *CompactDef) error {
 		newTables = append(newTables, t)
 	}
 
-	// 4. 原子提交元数据
 	return lc.commitCompaction(cd, newTables)
 }
 
@@ -151,7 +142,6 @@ func (lc *LevelsController) commitCompaction(cd *CompactDef, newTables []*table.
 
 	return nil
 }
-// removeTables 根据 FID 集合对源数组进行过滤删除
 func removeTables(src []*table.Table, toRemove []*table.Table) []*table.Table {
 	removeMap := make(map[uint32]struct{}, len(toRemove))
 	for _, t := range toRemove {
@@ -165,8 +155,6 @@ func removeTables(src []*table.Table, toRemove []*table.Table) []*table.Table {
 	}
 	return res
 }
-
-// getTableFIDs 提取数组中所有 Table 的 FID
 func getTableFIDs(tables []*table.Table) []uint32 {
 	fids := make([]uint32, 0, len(tables))
 	for _, t := range tables {

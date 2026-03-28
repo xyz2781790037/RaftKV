@@ -475,7 +475,6 @@ func (db *DB) LoadFrom(data []byte) error {
 		}
 	}
 
-	// 3. 处理尾部残余数据
 	if len(batch) > 0 {
 		db.mu.Lock()
 		db.wal.WriteBatch(batch)
@@ -523,7 +522,6 @@ func (db *DB) Flush() error {
 	db.skl = skl.NewSkiplist()
 	db.mu.Unlock()
 
-	// 🚨 核心防死锁机制：确保退出前必定释放 immSkl 并唤醒前台
 	defer func() {
 		db.mu.Lock()
 		db.immSkl = nil

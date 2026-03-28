@@ -4,13 +4,11 @@ import (
 	"RaftKV/badger/y"
 )
 
-// Iterator 是 SkipList 的迭代器，实现了 y.Iterator 接口
 type Iterator struct {
 	list *SkipList
 	n    *node // 当前指向的节点
 }
 
-// 确保编译期检查接口实现
 var _ y.Iterator = (*Iterator)(nil)
 
 // NewIterator 创建一个 SkipList 迭代器
