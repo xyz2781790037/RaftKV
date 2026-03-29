@@ -10,6 +10,8 @@ enum Error {
     ERR_NO_KEY = 2;
     ERR_WRONG_LEADER = 3;
     ERR_TIMEOUT = 4;
+    ERR_CAS_FAILED = 5;
+    ERR_WRONG_GROUP = 6;
 }
 
 message PutAppendArgs {
@@ -19,6 +21,7 @@ message PutAppendArgs {
     int64 clientId = 4;
     int64 seqId = 5;
     int64 ttl = 6;
+    string ExpectedValue = 7;
 }
 
 message PutAppendReply {
@@ -42,6 +45,7 @@ message Op {
     int64 ClientId = 4;
     int64 SeqId = 5;
     int64 ttl = 6;
+    string ExpectedValue = 7;
 }
 message BatchGetArgs {
     repeated string Keys = 1;  // 一次查多个 Key
@@ -56,16 +60,69 @@ message BatchGetReply {
 }
 message WatchRequest {
     string key = 1;
+    bool isPrefix = 2;   // 新增：是否为前缀监听
+    uint64 startTs = 3;  // 新增：断点续传的起始时间戳
 }
 
 message WatchResponse {
     string op = 1;
     string key = 2;
     string value = 3;
+    uint64 ts = 4;
+}
+message AddNodeArgs {
+    int64 nodeId = 1;
+    string addr = 2;
+}
+message AddNodeReply{
+    Error err = 1;
+}
+message RemoveNodeArgs {
+    int64 nodeId = 1;
+}
+message RemoveNodeReply {
+    Error err = 1;
+}
+message FetchShardArgs {
+    int64 ConfigNum = 1;  // 发起请求时的配置版本号，防止跨版本拉取错乱
+    int64 Shard = 2;      // 想要拉取哪个分片的数据
+}
+
+message FetchShardReply {
+    Error Err = 1;
+    int64 ConfigNum = 2;
+    map<string, string> Data = 3;    // 该分片下的所有 Key-Value 数据
+    map<int64, int64> SeqCache = 4;  // 极其重要！把 ClientID -> SeqID 的去重记录一并送走
+}
+
+message GCShardArgs {
+    int64 ConfigNum = 1;
+    int64 Shard = 2;
+}
+
+message GCShardReply {
+    Error Err = 1;
+}
+message MigrationPayload {
+    int64 configNum = 1;
+    int64 shard = 2;
+    map<string, string> data = 3;
+    map<int64, int64> seqCache = 4;
+}
+
+message PersistentState {
+    bytes configBytes = 1;
+    bytes lastConfigBytes = 2;
+    repeated int32 shardStates = 3;
 }
 service RaftKV {
     rpc Get(GetArgs) returns (GetReply);
     rpc PutAppend(PutAppendArgs) returns (PutAppendReply);
     rpc BatchGet(BatchGetArgs) returns (BatchGetReply);
     rpc Watch(WatchRequest) returns (stream WatchResponse);
+    rpc SendAddNode(AddNodeArgs) returns (AddNodeReply);
+    rpc SendRemoveNode(RemoveNodeArgs) returns (RemoveNodeReply);
+    rpc FetchShardData(FetchShardArgs) returns (FetchShardReply);
+    // 内部通信接口：通知旧主清理分片数据
+    rpc GCShardData(GCShardArgs) returns (GCShardReply);
 }

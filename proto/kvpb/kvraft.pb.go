@@ -29,6 +29,8 @@ const (
 	Error_ERR_NO_KEY       Error = 2
 	Error_ERR_WRONG_LEADER Error = 3
 	Error_ERR_TIMEOUT      Error = 4
+	Error_ERR_CAS_FAILED   Error = 5
+	Error_ERR_WRONG_GROUP  Error = 6
 )
 
 // Enum value maps for Error.
@@ -39,6 +41,8 @@ var (
 		2: "ERR_NO_KEY",
 		3: "ERR_WRONG_LEADER",
 		4: "ERR_TIMEOUT",
+		5: "ERR_CAS_FAILED",
+		6: "ERR_WRONG_GROUP",
 	}
 	Error_value = map[string]int32{
 		"ERR_UNKNOWN":      0,
@@ -46,6 +50,8 @@ var (
 		"ERR_NO_KEY":       2,
 		"ERR_WRONG_LEADER": 3,
 		"ERR_TIMEOUT":      4,
+		"ERR_CAS_FAILED":   5,
+		"ERR_WRONG_GROUP":  6,
 	}
 )
 
@@ -84,6 +90,7 @@ type PutAppendArgs struct {
 	ClientId      int64                  `protobuf:"varint,4,opt,name=clientId,proto3" json:"clientId,omitempty"`
 	SeqId         int64                  `protobuf:"varint,5,opt,name=seqId,proto3" json:"seqId,omitempty"`
 	Ttl           int64                  `protobuf:"varint,6,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	ExpectedValue string                 `protobuf:"bytes,7,opt,name=ExpectedValue,proto3" json:"ExpectedValue,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -158,6 +165,13 @@ func (x *PutAppendArgs) GetTtl() int64 {
 		return x.Ttl
 	}
 	return 0
+}
+
+func (x *PutAppendArgs) GetExpectedValue() string {
+	if x != nil {
+		return x.ExpectedValue
+	}
+	return ""
 }
 
 type PutAppendReply struct {
@@ -324,6 +338,7 @@ type Op struct {
 	ClientId      int64                  `protobuf:"varint,4,opt,name=ClientId,proto3" json:"ClientId,omitempty"`
 	SeqId         int64                  `protobuf:"varint,5,opt,name=SeqId,proto3" json:"SeqId,omitempty"`
 	Ttl           int64                  `protobuf:"varint,6,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	ExpectedValue string                 `protobuf:"bytes,7,opt,name=ExpectedValue,proto3" json:"ExpectedValue,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -398,6 +413,13 @@ func (x *Op) GetTtl() int64 {
 		return x.Ttl
 	}
 	return 0
+}
+
+func (x *Op) GetExpectedValue() string {
+	if x != nil {
+		return x.ExpectedValue
+	}
+	return ""
 }
 
 type BatchGetArgs struct {
@@ -523,6 +545,8 @@ func (x *BatchGetReply) GetErr() Error {
 type WatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	IsPrefix      bool                   `protobuf:"varint,2,opt,name=isPrefix,proto3" json:"isPrefix,omitempty"` // 新增：是否为前缀监听
+	StartTs       uint64                 `protobuf:"varint,3,opt,name=startTs,proto3" json:"startTs,omitempty"`   // 新增：断点续传的起始时间戳
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -564,11 +588,26 @@ func (x *WatchRequest) GetKey() string {
 	return ""
 }
 
+func (x *WatchRequest) GetIsPrefix() bool {
+	if x != nil {
+		return x.IsPrefix
+	}
+	return false
+}
+
+func (x *WatchRequest) GetStartTs() uint64 {
+	if x != nil {
+		return x.StartTs
+	}
+	return 0
+}
+
 type WatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Op            string                 `protobuf:"bytes,1,opt,name=op,proto3" json:"op,omitempty"`
 	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
 	Value         string                 `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	Ts            uint64                 `protobuf:"varint,4,opt,name=ts,proto3" json:"ts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -624,18 +663,554 @@ func (x *WatchResponse) GetValue() string {
 	return ""
 }
 
+func (x *WatchResponse) GetTs() uint64 {
+	if x != nil {
+		return x.Ts
+	}
+	return 0
+}
+
+type AddNodeArgs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        int64                  `protobuf:"varint,1,opt,name=nodeId,proto3" json:"nodeId,omitempty"`
+	Addr          string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddNodeArgs) Reset() {
+	*x = AddNodeArgs{}
+	mi := &file_kvraft_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddNodeArgs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddNodeArgs) ProtoMessage() {}
+
+func (x *AddNodeArgs) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddNodeArgs.ProtoReflect.Descriptor instead.
+func (*AddNodeArgs) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *AddNodeArgs) GetNodeId() int64 {
+	if x != nil {
+		return x.NodeId
+	}
+	return 0
+}
+
+func (x *AddNodeArgs) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+type AddNodeReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Err           Error                  `protobuf:"varint,1,opt,name=err,proto3,enum=kvraft.Error" json:"err,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddNodeReply) Reset() {
+	*x = AddNodeReply{}
+	mi := &file_kvraft_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddNodeReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddNodeReply) ProtoMessage() {}
+
+func (x *AddNodeReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddNodeReply.ProtoReflect.Descriptor instead.
+func (*AddNodeReply) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *AddNodeReply) GetErr() Error {
+	if x != nil {
+		return x.Err
+	}
+	return Error_ERR_UNKNOWN
+}
+
+type RemoveNodeArgs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        int64                  `protobuf:"varint,1,opt,name=nodeId,proto3" json:"nodeId,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveNodeArgs) Reset() {
+	*x = RemoveNodeArgs{}
+	mi := &file_kvraft_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveNodeArgs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveNodeArgs) ProtoMessage() {}
+
+func (x *RemoveNodeArgs) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveNodeArgs.ProtoReflect.Descriptor instead.
+func (*RemoveNodeArgs) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RemoveNodeArgs) GetNodeId() int64 {
+	if x != nil {
+		return x.NodeId
+	}
+	return 0
+}
+
+type RemoveNodeReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Err           Error                  `protobuf:"varint,1,opt,name=err,proto3,enum=kvraft.Error" json:"err,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveNodeReply) Reset() {
+	*x = RemoveNodeReply{}
+	mi := &file_kvraft_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveNodeReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveNodeReply) ProtoMessage() {}
+
+func (x *RemoveNodeReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveNodeReply.ProtoReflect.Descriptor instead.
+func (*RemoveNodeReply) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RemoveNodeReply) GetErr() Error {
+	if x != nil {
+		return x.Err
+	}
+	return Error_ERR_UNKNOWN
+}
+
+type FetchShardArgs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ConfigNum     int64                  `protobuf:"varint,1,opt,name=ConfigNum,proto3" json:"ConfigNum,omitempty"` // 发起请求时的配置版本号，防止跨版本拉取错乱
+	Shard         int64                  `protobuf:"varint,2,opt,name=Shard,proto3" json:"Shard,omitempty"`         // 想要拉取哪个分片的数据
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchShardArgs) Reset() {
+	*x = FetchShardArgs{}
+	mi := &file_kvraft_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchShardArgs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchShardArgs) ProtoMessage() {}
+
+func (x *FetchShardArgs) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchShardArgs.ProtoReflect.Descriptor instead.
+func (*FetchShardArgs) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *FetchShardArgs) GetConfigNum() int64 {
+	if x != nil {
+		return x.ConfigNum
+	}
+	return 0
+}
+
+func (x *FetchShardArgs) GetShard() int64 {
+	if x != nil {
+		return x.Shard
+	}
+	return 0
+}
+
+type FetchShardReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Err           Error                  `protobuf:"varint,1,opt,name=Err,proto3,enum=kvraft.Error" json:"Err,omitempty"`
+	ConfigNum     int64                  `protobuf:"varint,2,opt,name=ConfigNum,proto3" json:"ConfigNum,omitempty"`
+	Data          map[string]string      `protobuf:"bytes,3,rep,name=Data,proto3" json:"Data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`           // 该分片下的所有 Key-Value 数据
+	SeqCache      map[int64]int64        `protobuf:"bytes,4,rep,name=SeqCache,proto3" json:"SeqCache,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // 极其重要！把 ClientID -> SeqID 的去重记录一并送走
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchShardReply) Reset() {
+	*x = FetchShardReply{}
+	mi := &file_kvraft_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchShardReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchShardReply) ProtoMessage() {}
+
+func (x *FetchShardReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchShardReply.ProtoReflect.Descriptor instead.
+func (*FetchShardReply) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *FetchShardReply) GetErr() Error {
+	if x != nil {
+		return x.Err
+	}
+	return Error_ERR_UNKNOWN
+}
+
+func (x *FetchShardReply) GetConfigNum() int64 {
+	if x != nil {
+		return x.ConfigNum
+	}
+	return 0
+}
+
+func (x *FetchShardReply) GetData() map[string]string {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *FetchShardReply) GetSeqCache() map[int64]int64 {
+	if x != nil {
+		return x.SeqCache
+	}
+	return nil
+}
+
+type GCShardArgs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ConfigNum     int64                  `protobuf:"varint,1,opt,name=ConfigNum,proto3" json:"ConfigNum,omitempty"`
+	Shard         int64                  `protobuf:"varint,2,opt,name=Shard,proto3" json:"Shard,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GCShardArgs) Reset() {
+	*x = GCShardArgs{}
+	mi := &file_kvraft_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GCShardArgs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GCShardArgs) ProtoMessage() {}
+
+func (x *GCShardArgs) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GCShardArgs.ProtoReflect.Descriptor instead.
+func (*GCShardArgs) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GCShardArgs) GetConfigNum() int64 {
+	if x != nil {
+		return x.ConfigNum
+	}
+	return 0
+}
+
+func (x *GCShardArgs) GetShard() int64 {
+	if x != nil {
+		return x.Shard
+	}
+	return 0
+}
+
+type GCShardReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Err           Error                  `protobuf:"varint,1,opt,name=Err,proto3,enum=kvraft.Error" json:"Err,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GCShardReply) Reset() {
+	*x = GCShardReply{}
+	mi := &file_kvraft_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GCShardReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GCShardReply) ProtoMessage() {}
+
+func (x *GCShardReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GCShardReply.ProtoReflect.Descriptor instead.
+func (*GCShardReply) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *GCShardReply) GetErr() Error {
+	if x != nil {
+		return x.Err
+	}
+	return Error_ERR_UNKNOWN
+}
+
+type MigrationPayload struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ConfigNum     int64                  `protobuf:"varint,1,opt,name=configNum,proto3" json:"configNum,omitempty"`
+	Shard         int64                  `protobuf:"varint,2,opt,name=shard,proto3" json:"shard,omitempty"`
+	Data          map[string]string      `protobuf:"bytes,3,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	SeqCache      map[int64]int64        `protobuf:"bytes,4,rep,name=seqCache,proto3" json:"seqCache,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MigrationPayload) Reset() {
+	*x = MigrationPayload{}
+	mi := &file_kvraft_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MigrationPayload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MigrationPayload) ProtoMessage() {}
+
+func (x *MigrationPayload) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MigrationPayload.ProtoReflect.Descriptor instead.
+func (*MigrationPayload) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *MigrationPayload) GetConfigNum() int64 {
+	if x != nil {
+		return x.ConfigNum
+	}
+	return 0
+}
+
+func (x *MigrationPayload) GetShard() int64 {
+	if x != nil {
+		return x.Shard
+	}
+	return 0
+}
+
+func (x *MigrationPayload) GetData() map[string]string {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *MigrationPayload) GetSeqCache() map[int64]int64 {
+	if x != nil {
+		return x.SeqCache
+	}
+	return nil
+}
+
+type PersistentState struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ConfigBytes     []byte                 `protobuf:"bytes,1,opt,name=configBytes,proto3" json:"configBytes,omitempty"`
+	LastConfigBytes []byte                 `protobuf:"bytes,2,opt,name=lastConfigBytes,proto3" json:"lastConfigBytes,omitempty"`
+	ShardStates     []int32                `protobuf:"varint,3,rep,packed,name=shardStates,proto3" json:"shardStates,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PersistentState) Reset() {
+	*x = PersistentState{}
+	mi := &file_kvraft_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PersistentState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PersistentState) ProtoMessage() {}
+
+func (x *PersistentState) ProtoReflect() protoreflect.Message {
+	mi := &file_kvraft_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PersistentState.ProtoReflect.Descriptor instead.
+func (*PersistentState) Descriptor() ([]byte, []int) {
+	return file_kvraft_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *PersistentState) GetConfigBytes() []byte {
+	if x != nil {
+		return x.ConfigBytes
+	}
+	return nil
+}
+
+func (x *PersistentState) GetLastConfigBytes() []byte {
+	if x != nil {
+		return x.LastConfigBytes
+	}
+	return nil
+}
+
+func (x *PersistentState) GetShardStates() []int32 {
+	if x != nil {
+		return x.ShardStates
+	}
+	return nil
+}
+
 var File_kvraft_proto protoreflect.FileDescriptor
 
 const file_kvraft_proto_rawDesc = "" +
 	"\n" +
-	"\fkvraft.proto\x12\x06kvraft\"\x8b\x01\n" +
+	"\fkvraft.proto\x12\x06kvraft\"\xb1\x01\n" +
 	"\rPutAppendArgs\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x0e\n" +
 	"\x02op\x18\x03 \x01(\tR\x02op\x12\x1a\n" +
 	"\bclientId\x18\x04 \x01(\x03R\bclientId\x12\x14\n" +
 	"\x05seqId\x18\x05 \x01(\x03R\x05seqId\x12\x10\n" +
-	"\x03ttl\x18\x06 \x01(\x03R\x03ttl\"1\n" +
+	"\x03ttl\x18\x06 \x01(\x03R\x03ttl\x12$\n" +
+	"\rExpectedValue\x18\a \x01(\tR\rExpectedValue\"1\n" +
 	"\x0ePutAppendReply\x12\x1f\n" +
 	"\x03err\x18\x01 \x01(\x0e2\r.kvraft.ErrorR\x03err\"M\n" +
 	"\aGetArgs\x12\x10\n" +
@@ -644,14 +1219,15 @@ const file_kvraft_proto_rawDesc = "" +
 	"\x05seqId\x18\x03 \x01(\x03R\x05seqId\"A\n" +
 	"\bGetReply\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\tR\x05value\x12\x1f\n" +
-	"\x03err\x18\x02 \x01(\x0e2\r.kvraft.ErrorR\x03err\"\x8e\x01\n" +
+	"\x03err\x18\x02 \x01(\x0e2\r.kvraft.ErrorR\x03err\"\xb4\x01\n" +
 	"\x02Op\x12\x1c\n" +
 	"\tOperation\x18\x01 \x01(\tR\tOperation\x12\x10\n" +
 	"\x03Key\x18\x02 \x01(\tR\x03Key\x12\x14\n" +
 	"\x05Value\x18\x03 \x01(\tR\x05Value\x12\x1a\n" +
 	"\bClientId\x18\x04 \x01(\x03R\bClientId\x12\x14\n" +
 	"\x05SeqId\x18\x05 \x01(\x03R\x05SeqId\x12\x10\n" +
-	"\x03ttl\x18\x06 \x01(\x03R\x03ttl\"f\n" +
+	"\x03ttl\x18\x06 \x01(\x03R\x03ttl\x12$\n" +
+	"\rExpectedValue\x18\a \x01(\tR\rExpectedValue\"f\n" +
 	"\fBatchGetArgs\x12\x12\n" +
 	"\x04Keys\x18\x01 \x03(\tR\x04Keys\x12\x1a\n" +
 	"\bClientId\x18\x02 \x01(\x03R\bClientId\x12\x14\n" +
@@ -662,25 +1238,77 @@ const file_kvraft_proto_rawDesc = "" +
 	"\x03Err\x18\x02 \x01(\x0e2\r.kvraft.ErrorR\x03Err\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\" \n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"V\n" +
 	"\fWatchRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\"G\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1a\n" +
+	"\bisPrefix\x18\x02 \x01(\bR\bisPrefix\x12\x18\n" +
+	"\astartTs\x18\x03 \x01(\x04R\astartTs\"W\n" +
 	"\rWatchResponse\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x03 \x01(\tR\x05value*W\n" +
+	"\x05value\x18\x03 \x01(\tR\x05value\x12\x0e\n" +
+	"\x02ts\x18\x04 \x01(\x04R\x02ts\"9\n" +
+	"\vAddNodeArgs\x12\x16\n" +
+	"\x06nodeId\x18\x01 \x01(\x03R\x06nodeId\x12\x12\n" +
+	"\x04addr\x18\x02 \x01(\tR\x04addr\"/\n" +
+	"\fAddNodeReply\x12\x1f\n" +
+	"\x03err\x18\x01 \x01(\x0e2\r.kvraft.ErrorR\x03err\"(\n" +
+	"\x0eRemoveNodeArgs\x12\x16\n" +
+	"\x06nodeId\x18\x01 \x01(\x03R\x06nodeId\"2\n" +
+	"\x0fRemoveNodeReply\x12\x1f\n" +
+	"\x03err\x18\x01 \x01(\x0e2\r.kvraft.ErrorR\x03err\"D\n" +
+	"\x0eFetchShardArgs\x12\x1c\n" +
+	"\tConfigNum\x18\x01 \x01(\x03R\tConfigNum\x12\x14\n" +
+	"\x05Shard\x18\x02 \x01(\x03R\x05Shard\"\xc0\x02\n" +
+	"\x0fFetchShardReply\x12\x1f\n" +
+	"\x03Err\x18\x01 \x01(\x0e2\r.kvraft.ErrorR\x03Err\x12\x1c\n" +
+	"\tConfigNum\x18\x02 \x01(\x03R\tConfigNum\x125\n" +
+	"\x04Data\x18\x03 \x03(\v2!.kvraft.FetchShardReply.DataEntryR\x04Data\x12A\n" +
+	"\bSeqCache\x18\x04 \x03(\v2%.kvraft.FetchShardReply.SeqCacheEntryR\bSeqCache\x1a7\n" +
+	"\tDataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a;\n" +
+	"\rSeqCacheEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\x03R\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"A\n" +
+	"\vGCShardArgs\x12\x1c\n" +
+	"\tConfigNum\x18\x01 \x01(\x03R\tConfigNum\x12\x14\n" +
+	"\x05Shard\x18\x02 \x01(\x03R\x05Shard\"/\n" +
+	"\fGCShardReply\x12\x1f\n" +
+	"\x03Err\x18\x01 \x01(\x0e2\r.kvraft.ErrorR\x03Err\"\xb8\x02\n" +
+	"\x10MigrationPayload\x12\x1c\n" +
+	"\tconfigNum\x18\x01 \x01(\x03R\tconfigNum\x12\x14\n" +
+	"\x05shard\x18\x02 \x01(\x03R\x05shard\x126\n" +
+	"\x04data\x18\x03 \x03(\v2\".kvraft.MigrationPayload.DataEntryR\x04data\x12B\n" +
+	"\bseqCache\x18\x04 \x03(\v2&.kvraft.MigrationPayload.SeqCacheEntryR\bseqCache\x1a7\n" +
+	"\tDataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a;\n" +
+	"\rSeqCacheEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\x03R\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"\x7f\n" +
+	"\x0fPersistentState\x12 \n" +
+	"\vconfigBytes\x18\x01 \x01(\fR\vconfigBytes\x12(\n" +
+	"\x0flastConfigBytes\x18\x02 \x01(\fR\x0flastConfigBytes\x12 \n" +
+	"\vshardStates\x18\x03 \x03(\x05R\vshardStates*\x80\x01\n" +
 	"\x05Error\x12\x0f\n" +
 	"\vERR_UNKNOWN\x10\x00\x12\x06\n" +
 	"\x02OK\x10\x01\x12\x0e\n" +
 	"\n" +
 	"ERR_NO_KEY\x10\x02\x12\x14\n" +
 	"\x10ERR_WRONG_LEADER\x10\x03\x12\x0f\n" +
-	"\vERR_TIMEOUT\x10\x042\xdf\x01\n" +
+	"\vERR_TIMEOUT\x10\x04\x12\x12\n" +
+	"\x0eERR_CAS_FAILED\x10\x05\x12\x13\n" +
+	"\x0fERR_WRONG_GROUP\x10\x062\xd9\x03\n" +
 	"\x06RaftKV\x12(\n" +
 	"\x03Get\x12\x0f.kvraft.GetArgs\x1a\x10.kvraft.GetReply\x12:\n" +
 	"\tPutAppend\x12\x15.kvraft.PutAppendArgs\x1a\x16.kvraft.PutAppendReply\x127\n" +
 	"\bBatchGet\x12\x14.kvraft.BatchGetArgs\x1a\x15.kvraft.BatchGetReply\x126\n" +
-	"\x05Watch\x12\x14.kvraft.WatchRequest\x1a\x15.kvraft.WatchResponse0\x01B\bZ\x06./kvpbb\x06proto3"
+	"\x05Watch\x12\x14.kvraft.WatchRequest\x1a\x15.kvraft.WatchResponse0\x01\x128\n" +
+	"\vSendAddNode\x12\x13.kvraft.AddNodeArgs\x1a\x14.kvraft.AddNodeReply\x12A\n" +
+	"\x0eSendRemoveNode\x12\x16.kvraft.RemoveNodeArgs\x1a\x17.kvraft.RemoveNodeReply\x12A\n" +
+	"\x0eFetchShardData\x12\x16.kvraft.FetchShardArgs\x1a\x17.kvraft.FetchShardReply\x128\n" +
+	"\vGCShardData\x12\x13.kvraft.GCShardArgs\x1a\x14.kvraft.GCShardReplyB\bZ\x06./kvpbb\x06proto3"
 
 var (
 	file_kvraft_proto_rawDescOnce sync.Once
@@ -695,38 +1323,68 @@ func file_kvraft_proto_rawDescGZIP() []byte {
 }
 
 var file_kvraft_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kvraft_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_kvraft_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_kvraft_proto_goTypes = []any{
-	(Error)(0),             // 0: kvraft.Error
-	(*PutAppendArgs)(nil),  // 1: kvraft.PutAppendArgs
-	(*PutAppendReply)(nil), // 2: kvraft.PutAppendReply
-	(*GetArgs)(nil),        // 3: kvraft.GetArgs
-	(*GetReply)(nil),       // 4: kvraft.GetReply
-	(*Op)(nil),             // 5: kvraft.Op
-	(*BatchGetArgs)(nil),   // 6: kvraft.BatchGetArgs
-	(*BatchGetReply)(nil),  // 7: kvraft.BatchGetReply
-	(*WatchRequest)(nil),   // 8: kvraft.WatchRequest
-	(*WatchResponse)(nil),  // 9: kvraft.WatchResponse
-	nil,                    // 10: kvraft.BatchGetReply.ValuesEntry
+	(Error)(0),               // 0: kvraft.Error
+	(*PutAppendArgs)(nil),    // 1: kvraft.PutAppendArgs
+	(*PutAppendReply)(nil),   // 2: kvraft.PutAppendReply
+	(*GetArgs)(nil),          // 3: kvraft.GetArgs
+	(*GetReply)(nil),         // 4: kvraft.GetReply
+	(*Op)(nil),               // 5: kvraft.Op
+	(*BatchGetArgs)(nil),     // 6: kvraft.BatchGetArgs
+	(*BatchGetReply)(nil),    // 7: kvraft.BatchGetReply
+	(*WatchRequest)(nil),     // 8: kvraft.WatchRequest
+	(*WatchResponse)(nil),    // 9: kvraft.WatchResponse
+	(*AddNodeArgs)(nil),      // 10: kvraft.AddNodeArgs
+	(*AddNodeReply)(nil),     // 11: kvraft.AddNodeReply
+	(*RemoveNodeArgs)(nil),   // 12: kvraft.RemoveNodeArgs
+	(*RemoveNodeReply)(nil),  // 13: kvraft.RemoveNodeReply
+	(*FetchShardArgs)(nil),   // 14: kvraft.FetchShardArgs
+	(*FetchShardReply)(nil),  // 15: kvraft.FetchShardReply
+	(*GCShardArgs)(nil),      // 16: kvraft.GCShardArgs
+	(*GCShardReply)(nil),     // 17: kvraft.GCShardReply
+	(*MigrationPayload)(nil), // 18: kvraft.MigrationPayload
+	(*PersistentState)(nil),  // 19: kvraft.PersistentState
+	nil,                      // 20: kvraft.BatchGetReply.ValuesEntry
+	nil,                      // 21: kvraft.FetchShardReply.DataEntry
+	nil,                      // 22: kvraft.FetchShardReply.SeqCacheEntry
+	nil,                      // 23: kvraft.MigrationPayload.DataEntry
+	nil,                      // 24: kvraft.MigrationPayload.SeqCacheEntry
 }
 var file_kvraft_proto_depIdxs = []int32{
 	0,  // 0: kvraft.PutAppendReply.err:type_name -> kvraft.Error
 	0,  // 1: kvraft.GetReply.err:type_name -> kvraft.Error
-	10, // 2: kvraft.BatchGetReply.Values:type_name -> kvraft.BatchGetReply.ValuesEntry
+	20, // 2: kvraft.BatchGetReply.Values:type_name -> kvraft.BatchGetReply.ValuesEntry
 	0,  // 3: kvraft.BatchGetReply.Err:type_name -> kvraft.Error
-	3,  // 4: kvraft.RaftKV.Get:input_type -> kvraft.GetArgs
-	1,  // 5: kvraft.RaftKV.PutAppend:input_type -> kvraft.PutAppendArgs
-	6,  // 6: kvraft.RaftKV.BatchGet:input_type -> kvraft.BatchGetArgs
-	8,  // 7: kvraft.RaftKV.Watch:input_type -> kvraft.WatchRequest
-	4,  // 8: kvraft.RaftKV.Get:output_type -> kvraft.GetReply
-	2,  // 9: kvraft.RaftKV.PutAppend:output_type -> kvraft.PutAppendReply
-	7,  // 10: kvraft.RaftKV.BatchGet:output_type -> kvraft.BatchGetReply
-	9,  // 11: kvraft.RaftKV.Watch:output_type -> kvraft.WatchResponse
-	8,  // [8:12] is the sub-list for method output_type
-	4,  // [4:8] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	0,  // 4: kvraft.AddNodeReply.err:type_name -> kvraft.Error
+	0,  // 5: kvraft.RemoveNodeReply.err:type_name -> kvraft.Error
+	0,  // 6: kvraft.FetchShardReply.Err:type_name -> kvraft.Error
+	21, // 7: kvraft.FetchShardReply.Data:type_name -> kvraft.FetchShardReply.DataEntry
+	22, // 8: kvraft.FetchShardReply.SeqCache:type_name -> kvraft.FetchShardReply.SeqCacheEntry
+	0,  // 9: kvraft.GCShardReply.Err:type_name -> kvraft.Error
+	23, // 10: kvraft.MigrationPayload.data:type_name -> kvraft.MigrationPayload.DataEntry
+	24, // 11: kvraft.MigrationPayload.seqCache:type_name -> kvraft.MigrationPayload.SeqCacheEntry
+	3,  // 12: kvraft.RaftKV.Get:input_type -> kvraft.GetArgs
+	1,  // 13: kvraft.RaftKV.PutAppend:input_type -> kvraft.PutAppendArgs
+	6,  // 14: kvraft.RaftKV.BatchGet:input_type -> kvraft.BatchGetArgs
+	8,  // 15: kvraft.RaftKV.Watch:input_type -> kvraft.WatchRequest
+	10, // 16: kvraft.RaftKV.SendAddNode:input_type -> kvraft.AddNodeArgs
+	12, // 17: kvraft.RaftKV.SendRemoveNode:input_type -> kvraft.RemoveNodeArgs
+	14, // 18: kvraft.RaftKV.FetchShardData:input_type -> kvraft.FetchShardArgs
+	16, // 19: kvraft.RaftKV.GCShardData:input_type -> kvraft.GCShardArgs
+	4,  // 20: kvraft.RaftKV.Get:output_type -> kvraft.GetReply
+	2,  // 21: kvraft.RaftKV.PutAppend:output_type -> kvraft.PutAppendReply
+	7,  // 22: kvraft.RaftKV.BatchGet:output_type -> kvraft.BatchGetReply
+	9,  // 23: kvraft.RaftKV.Watch:output_type -> kvraft.WatchResponse
+	11, // 24: kvraft.RaftKV.SendAddNode:output_type -> kvraft.AddNodeReply
+	13, // 25: kvraft.RaftKV.SendRemoveNode:output_type -> kvraft.RemoveNodeReply
+	15, // 26: kvraft.RaftKV.FetchShardData:output_type -> kvraft.FetchShardReply
+	17, // 27: kvraft.RaftKV.GCShardData:output_type -> kvraft.GCShardReply
+	20, // [20:28] is the sub-list for method output_type
+	12, // [12:20] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_kvraft_proto_init() }
@@ -740,7 +1398,7 @@ func file_kvraft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kvraft_proto_rawDesc), len(file_kvraft_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

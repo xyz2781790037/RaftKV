@@ -139,6 +139,7 @@ type RequestVoteArgs struct {
 	CandidateId   int64                  `protobuf:"varint,2,opt,name=CandidateId,proto3" json:"CandidateId,omitempty"`
 	LastLogIndex  int64                  `protobuf:"varint,3,opt,name=LastLogIndex,proto3" json:"LastLogIndex,omitempty"`
 	LastLogTerm   int64                  `protobuf:"varint,4,opt,name=LastLogTerm,proto3" json:"LastLogTerm,omitempty"`
+	IsPreVote     bool                   `protobuf:"varint,5,opt,name=IsPreVote,proto3" json:"IsPreVote,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -199,6 +200,13 @@ func (x *RequestVoteArgs) GetLastLogTerm() int64 {
 		return x.LastLogTerm
 	}
 	return 0
+}
+
+func (x *RequestVoteArgs) GetIsPreVote() bool {
+	if x != nil {
+		return x.IsPreVote
+	}
+	return false
 }
 
 type RequestVoteReply struct {
@@ -412,6 +420,8 @@ type InstallSnapshotArgs struct {
 	LastIncludedIndex int64                  `protobuf:"varint,3,opt,name=LastIncludedIndex,proto3" json:"LastIncludedIndex,omitempty"`
 	LastIncludedTerm  int64                  `protobuf:"varint,4,opt,name=LastIncludedTerm,proto3" json:"LastIncludedTerm,omitempty"`
 	Data              []byte                 `protobuf:"bytes,5,opt,name=Data,proto3" json:"Data,omitempty"`
+	Offset            int64                  `protobuf:"varint,6,opt,name=Offset,proto3" json:"Offset,omitempty"`
+	Done              bool                   `protobuf:"varint,7,opt,name=Done,proto3" json:"Done,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -479,6 +489,20 @@ func (x *InstallSnapshotArgs) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *InstallSnapshotArgs) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *InstallSnapshotArgs) GetDone() bool {
+	if x != nil {
+		return x.Done
+	}
+	return false
 }
 
 type InstallSnapshotReply struct {
@@ -690,12 +714,13 @@ const file_raft_proto_rawDesc = "" +
 	"\bLogEntry\x12\x18\n" +
 	"\aCommand\x18\x01 \x01(\fR\aCommand\x12\x12\n" +
 	"\x04Term\x18\x02 \x01(\x03R\x04Term\x12\x14\n" +
-	"\x05index\x18\x03 \x01(\x03R\x05index\"\x8d\x01\n" +
+	"\x05index\x18\x03 \x01(\x03R\x05index\"\xab\x01\n" +
 	"\x0fRequestVoteArgs\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x03R\x04Term\x12 \n" +
 	"\vCandidateId\x18\x02 \x01(\x03R\vCandidateId\x12\"\n" +
 	"\fLastLogIndex\x18\x03 \x01(\x03R\fLastLogIndex\x12 \n" +
-	"\vLastLogTerm\x18\x04 \x01(\x03R\vLastLogTerm\"H\n" +
+	"\vLastLogTerm\x18\x04 \x01(\x03R\vLastLogTerm\x12\x1c\n" +
+	"\tIsPreVote\x18\x05 \x01(\bR\tIsPreVote\"H\n" +
 	"\x10RequestVoteReply\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x03R\x04Term\x12 \n" +
 	"\vVoteGranted\x18\x02 \x01(\bR\vVoteGranted\"\xd7\x01\n" +
@@ -710,13 +735,15 @@ const file_raft_proto_rawDesc = "" +
 	"\x04Term\x18\x01 \x01(\x03R\x04Term\x12\x18\n" +
 	"\aSuccess\x18\x02 \x01(\bR\aSuccess\x12$\n" +
 	"\rConflictIndex\x18\x03 \x01(\x03R\rConflictIndex\x12\"\n" +
-	"\fConflictTerm\x18\x04 \x01(\x03R\fConflictTerm\"\xb3\x01\n" +
+	"\fConflictTerm\x18\x04 \x01(\x03R\fConflictTerm\"\xdf\x01\n" +
 	"\x13InstallSnapshotArgs\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x03R\x04Term\x12\x1a\n" +
 	"\bleaderId\x18\x02 \x01(\x03R\bleaderId\x12,\n" +
 	"\x11LastIncludedIndex\x18\x03 \x01(\x03R\x11LastIncludedIndex\x12*\n" +
 	"\x10LastIncludedTerm\x18\x04 \x01(\x03R\x10LastIncludedTerm\x12\x12\n" +
-	"\x04Data\x18\x05 \x01(\fR\x04Data\"*\n" +
+	"\x04Data\x18\x05 \x01(\fR\x04Data\x12\x16\n" +
+	"\x06Offset\x18\x06 \x01(\x03R\x06Offset\x12\x12\n" +
+	"\x04Done\x18\a \x01(\bR\x04Done\"*\n" +
 	"\x14InstallSnapshotReply\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x03R\x04Term\"I\n" +
 	"\tRaftState\x12 \n" +

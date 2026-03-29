@@ -19,10 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RaftKV_Get_FullMethodName       = "/kvraft.RaftKV/Get"
-	RaftKV_PutAppend_FullMethodName = "/kvraft.RaftKV/PutAppend"
-	RaftKV_BatchGet_FullMethodName  = "/kvraft.RaftKV/BatchGet"
-	RaftKV_Watch_FullMethodName     = "/kvraft.RaftKV/Watch"
+	RaftKV_Get_FullMethodName            = "/kvraft.RaftKV/Get"
+	RaftKV_PutAppend_FullMethodName      = "/kvraft.RaftKV/PutAppend"
+	RaftKV_BatchGet_FullMethodName       = "/kvraft.RaftKV/BatchGet"
+	RaftKV_Watch_FullMethodName          = "/kvraft.RaftKV/Watch"
+	RaftKV_SendAddNode_FullMethodName    = "/kvraft.RaftKV/SendAddNode"
+	RaftKV_SendRemoveNode_FullMethodName = "/kvraft.RaftKV/SendRemoveNode"
+	RaftKV_FetchShardData_FullMethodName = "/kvraft.RaftKV/FetchShardData"
+	RaftKV_GCShardData_FullMethodName    = "/kvraft.RaftKV/GCShardData"
 )
 
 // RaftKVClient is the client API for RaftKV service.
@@ -33,6 +37,11 @@ type RaftKVClient interface {
 	PutAppend(ctx context.Context, in *PutAppendArgs, opts ...grpc.CallOption) (*PutAppendReply, error)
 	BatchGet(ctx context.Context, in *BatchGetArgs, opts ...grpc.CallOption) (*BatchGetReply, error)
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
+	SendAddNode(ctx context.Context, in *AddNodeArgs, opts ...grpc.CallOption) (*AddNodeReply, error)
+	SendRemoveNode(ctx context.Context, in *RemoveNodeArgs, opts ...grpc.CallOption) (*RemoveNodeReply, error)
+	FetchShardData(ctx context.Context, in *FetchShardArgs, opts ...grpc.CallOption) (*FetchShardReply, error)
+	// 内部通信接口：通知旧主清理分片数据
+	GCShardData(ctx context.Context, in *GCShardArgs, opts ...grpc.CallOption) (*GCShardReply, error)
 }
 
 type raftKVClient struct {
@@ -92,6 +101,46 @@ func (c *raftKVClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type RaftKV_WatchClient = grpc.ServerStreamingClient[WatchResponse]
 
+func (c *raftKVClient) SendAddNode(ctx context.Context, in *AddNodeArgs, opts ...grpc.CallOption) (*AddNodeReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddNodeReply)
+	err := c.cc.Invoke(ctx, RaftKV_SendAddNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *raftKVClient) SendRemoveNode(ctx context.Context, in *RemoveNodeArgs, opts ...grpc.CallOption) (*RemoveNodeReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveNodeReply)
+	err := c.cc.Invoke(ctx, RaftKV_SendRemoveNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *raftKVClient) FetchShardData(ctx context.Context, in *FetchShardArgs, opts ...grpc.CallOption) (*FetchShardReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FetchShardReply)
+	err := c.cc.Invoke(ctx, RaftKV_FetchShardData_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *raftKVClient) GCShardData(ctx context.Context, in *GCShardArgs, opts ...grpc.CallOption) (*GCShardReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GCShardReply)
+	err := c.cc.Invoke(ctx, RaftKV_GCShardData_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RaftKVServer is the server API for RaftKV service.
 // All implementations must embed UnimplementedRaftKVServer
 // for forward compatibility.
@@ -100,6 +149,11 @@ type RaftKVServer interface {
 	PutAppend(context.Context, *PutAppendArgs) (*PutAppendReply, error)
 	BatchGet(context.Context, *BatchGetArgs) (*BatchGetReply, error)
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
+	SendAddNode(context.Context, *AddNodeArgs) (*AddNodeReply, error)
+	SendRemoveNode(context.Context, *RemoveNodeArgs) (*RemoveNodeReply, error)
+	FetchShardData(context.Context, *FetchShardArgs) (*FetchShardReply, error)
+	// 内部通信接口：通知旧主清理分片数据
+	GCShardData(context.Context, *GCShardArgs) (*GCShardReply, error)
 	mustEmbedUnimplementedRaftKVServer()
 }
 
@@ -121,6 +175,18 @@ func (UnimplementedRaftKVServer) BatchGet(context.Context, *BatchGetArgs) (*Batc
 }
 func (UnimplementedRaftKVServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error {
 	return status.Error(codes.Unimplemented, "method Watch not implemented")
+}
+func (UnimplementedRaftKVServer) SendAddNode(context.Context, *AddNodeArgs) (*AddNodeReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendAddNode not implemented")
+}
+func (UnimplementedRaftKVServer) SendRemoveNode(context.Context, *RemoveNodeArgs) (*RemoveNodeReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendRemoveNode not implemented")
+}
+func (UnimplementedRaftKVServer) FetchShardData(context.Context, *FetchShardArgs) (*FetchShardReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchShardData not implemented")
+}
+func (UnimplementedRaftKVServer) GCShardData(context.Context, *GCShardArgs) (*GCShardReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method GCShardData not implemented")
 }
 func (UnimplementedRaftKVServer) mustEmbedUnimplementedRaftKVServer() {}
 func (UnimplementedRaftKVServer) testEmbeddedByValue()                {}
@@ -208,6 +274,78 @@ func _RaftKV_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type RaftKV_WatchServer = grpc.ServerStreamingServer[WatchResponse]
 
+func _RaftKV_SendAddNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddNodeArgs)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftKVServer).SendAddNode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftKV_SendAddNode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftKVServer).SendAddNode(ctx, req.(*AddNodeArgs))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RaftKV_SendRemoveNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveNodeArgs)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftKVServer).SendRemoveNode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftKV_SendRemoveNode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftKVServer).SendRemoveNode(ctx, req.(*RemoveNodeArgs))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RaftKV_FetchShardData_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchShardArgs)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftKVServer).FetchShardData(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftKV_FetchShardData_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftKVServer).FetchShardData(ctx, req.(*FetchShardArgs))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RaftKV_GCShardData_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GCShardArgs)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftKVServer).GCShardData(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftKV_GCShardData_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftKVServer).GCShardData(ctx, req.(*GCShardArgs))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RaftKV_ServiceDesc is the grpc.ServiceDesc for RaftKV service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -226,6 +364,22 @@ var RaftKV_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BatchGet",
 			Handler:    _RaftKV_BatchGet_Handler,
+		},
+		{
+			MethodName: "SendAddNode",
+			Handler:    _RaftKV_SendAddNode_Handler,
+		},
+		{
+			MethodName: "SendRemoveNode",
+			Handler:    _RaftKV_SendRemoveNode_Handler,
+		},
+		{
+			MethodName: "FetchShardData",
+			Handler:    _RaftKV_FetchShardData_Handler,
+		},
+		{
+			MethodName: "GCShardData",
+			Handler:    _RaftKV_GCShardData_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

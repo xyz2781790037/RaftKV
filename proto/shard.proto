@@ -1,0 +1,72 @@
+syntax = "proto3";
+package shard;
+option go_package = "./shardpb";
+
+message Config {
+    int64 Num = 1;                        // 配置版本号 (严格单调递增，比如 1, 2, 3...)
+    map<int64, int64> Shards = 2;         // 分片映射表：ShardID (固定 0-9) -> GroupID
+    map<int64, GroupServers> Groups = 3;  // GroupID -> 该 Group 下的所有服务器地址列表
+}
+
+message GroupServers {
+    repeated string Servers = 1;  // 物理节点的 RPC 地址，例如 ["127.0.0.1:8001", "127.0.0.1:8002"]
+}
+
+message JoinArgs {
+    map<int64, GroupServers> Servers = 1;  // 新增的 GroupID -> 服务器列表
+    int64 ClientId = 2;                    // 用于复用你写好的防重放机制
+    int64 SeqId = 3;
+}
+message JoinReply {
+    bool WrongLeader = 1;
+    string Err = 2;
+}
+message LeaveArgs {
+    repeated int64 GIDs = 1;  // 要踢掉的 GroupID 列表
+    int64 ClientId = 2;
+    int64 SeqId = 3;
+}
+message LeaveReply {
+    bool WrongLeader = 1;
+    string Err = 2;
+}
+
+message MoveArgs {
+    int64 Shard = 1;  // 分片 ID
+    int64 GID = 2;    // 目标 GroupID
+    int64 ClientId = 3;
+    int64 SeqId = 4;
+}
+message MoveReply {
+    bool WrongLeader = 1;
+    string Err = 2;
+}
+
+message QueryArgs {
+    int64 Num = 1;  // 想要查询的版本号。如果是 -1，代表查询最新版本
+}
+message QueryReply {
+    bool WrongLeader = 1;
+    string Err = 2;
+    Config Config = 3;  // 返回对应的路由表
+}
+message Op {
+    string Operation = 1;  // "Join", "Leave", "Move", "Query"
+    int64 ClientId = 2;
+    int64 SeqId = 3;
+    JoinArgs JoinArgs = 4;
+    LeaveArgs LeaveArgs = 5;
+    MoveArgs MoveArgs = 6;
+    QueryArgs QueryArgs = 7;
+}
+message SMPersistentState {
+    repeated Config configs = 1;
+    map<int64, int64> seqCache = 2;
+}
+// 定义 ShardMaster 中控节点提供的 RPC 服务
+service ShardMaster {
+    rpc Join(JoinArgs) returns (JoinReply);
+    rpc Leave(LeaveArgs) returns (LeaveReply);
+    rpc Move(MoveArgs) returns (MoveReply);
+    rpc Query(QueryArgs) returns (QueryReply);
+}

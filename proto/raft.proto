@@ -2,14 +2,14 @@ syntax = "proto3";
 package raft;
 option go_package = "./raftpb";
 
-enum PeerState{
+enum PeerState {
     UNKNOWN = 0;
     LEADER = 1;
     FOLLOWER = 2;
     CANDIDATE = 3;
 }
 
-message LogEntry{
+message LogEntry {
     bytes Command = 1;
     int64 Term = 2;
     int64 index = 3;
@@ -20,13 +20,14 @@ message RequestVoteArgs {
     int64 CandidateId = 2;
     int64 LastLogIndex = 3;
     int64 LastLogTerm = 4;
+    bool IsPreVote = 5;
 }
 message RequestVoteReply {
     int64 Term = 1;
     bool VoteGranted = 2;
 }
 
-message AppendEntriesArgs{
+message AppendEntriesArgs {
     int64 Term = 1;
     int64 LeaderId = 2;
     int64 PrevLogIndex = 3;
@@ -34,7 +35,7 @@ message AppendEntriesArgs{
     repeated LogEntry Entries = 5;
     int64 LeaderCommit = 6;
 }
-message AppendEntriesReply{
+message AppendEntriesReply {
     int64 Term = 1;
     bool Success = 2;
     int64 ConflictIndex = 3;
@@ -58,16 +59,16 @@ message RaftState {
     int64 CurrentTerm = 1;
     int64 VotedFor = 2;
 }
-message SnapshotState{
+message SnapshotState {
     int64 LastIncludedIndex = 1;
     int64 LastIncludedTerm = 2;
 }
-message FullSnapshot{
+message FullSnapshot {
     SnapshotState metadata = 1;
     bytes data = 2;
 }
- service Raft {
+service Raft {
     rpc RequestVote(RequestVoteArgs) returns (RequestVoteReply);
     rpc AppendEntries(AppendEntriesArgs) returns (AppendEntriesReply);
-    rpc InstallSnapshot(stream InstallSnapshotArgs) returns (InstallSnapshotReply);
+    rpc InstallSnapshot(InstallSnapshotArgs) returns (InstallSnapshotReply);
 }
