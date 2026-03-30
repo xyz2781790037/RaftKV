@@ -5,14 +5,18 @@ import (
 	"RaftKV/service/raftapi"
 	"RaftKV/tool"
 	"context"
+	"fmt"
 	"time"
 )
 
 func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.RequestVoteReply, error) {
+	if rf.peers.IsBanned(args.CandidateId) {
+		return nil, fmt.Errorf("YOU_ARE_EXILED")
+	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply := &pb.RequestVoteReply{}
-	
+
 	select {
 	case <-ctx.Done():
 		return reply, nil
@@ -22,7 +26,8 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 		return reply, nil
 	}
 
-	const MinElectionTimeout = 500 * time.Millisecond 
+
+	const MinElectionTimeout = 500 * time.Millisecond
 	if time.Since(rf.lastResetElectionTime) < MinElectionTimeout {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
@@ -30,15 +35,15 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 		return reply, nil
 	}
 
-	persistNeeded := false
+	if !args.IsPreVote && args.Term > rf.currentTerm {
+		rf.becomeFollower(args.Term)
+		rf.persist()
+	}
+
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return reply, nil
-	}
-	if args.Term > rf.currentTerm {
-		rf.becomeFollower(args.Term)
-		persistNeeded = true
 	}
 	reply.Term = rf.currentTerm
 
@@ -51,17 +56,25 @@ func (rf *Raft) RequestVote(ctx context.Context, args *pb.RequestVoteArgs) (*pb.
 		return args.LastLogIndex >= lastLogIndex
 	}()
 
-	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && upToDate {
-		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
-		rf.resetElectionTimer()
-		persistNeeded = true
-	} else {
-		reply.VoteGranted = false
-	}
 
-	if persistNeeded {
-		rf.persist()
+	if !args.IsPreVote {
+
+		if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && upToDate {
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateId
+			rf.resetElectionTimer()
+			rf.lastResetElectionTime = time.Now()
+			rf.persist()
+		} else {
+			reply.VoteGranted = false
+		}
+	} else {
+
+		if upToDate {
+			reply.VoteGranted = true
+		} else {
+			reply.VoteGranted = false
+		}
 	}
 	return reply, nil
 }
@@ -86,7 +99,7 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 		rf.becomeFollower(args.Term)
 		persistNeeded = true
 	}
-	
+
 	// 进门第一瞬间立刻重置存活时间，保证只要网络通就不脑裂
 	rf.lastResetElectionTime = time.Now()
 	rf.resetElectionTimer()
@@ -135,9 +148,8 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 			newEntries := args.Entries[newEntriesStartIndex:]
 			rf.log = append(rf.log, newEntries...)
 			rf.mu.Unlock()
-			rf.store.Log.AppendLog(newEntries) // 绝对不能用 RewriteLogs
+			rf.store.Log.AppendLog(newEntries)
 			rf.mu.Lock()
-			persistNeeded = true
 			break
 		}
 
@@ -151,7 +163,6 @@ func (rf *Raft) AppendEntries(ctx context.Context, args *pb.AppendEntriesArgs) (
 			rf.mu.Unlock()
 			rf.store.Log.RewriteLogs(rf.log)
 			rf.mu.Lock()
-			persistNeeded = true
 			break
 		}
 
@@ -196,6 +207,7 @@ func (rf *Raft) InstallSnapshot(ctx context.Context, args *pb.InstallSnapshotArg
 		rf.becomeFollower(args.Term)
 	}
 	rf.resetElectionTimer()
+	reply.Term = rf.currentTerm
 	if args.LastIncludedIndex <= rf.lastIncludedIndex {
 		rf.mu.Unlock()
 		return reply, nil

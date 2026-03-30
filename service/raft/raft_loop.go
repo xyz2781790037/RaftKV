@@ -53,7 +53,6 @@ func (rf *Raft) heartbeatTimer() {
             isLeader := rf.state == Leader
             rf.mu.Unlock()
             if isLeader {
-                // 🚨 走纯心跳通道，0字节负荷，绝对不堵车
                 go rf.sendAppendEntries(true)
             }
 
@@ -81,7 +80,6 @@ func (rf *Raft) heartbeatTimer() {
             isLeader := rf.state == Leader
             rf.mu.Unlock()
             if isLeader {
-                // 🚨 走数据同步通道
                 go rf.sendAppendEntries(false)
             }
             needSendData = false
@@ -188,7 +186,7 @@ func (rf *Raft) applier() {
 	}
 }
 func (rf *Raft) flushLoop(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(3 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -200,7 +198,7 @@ func (rf *Raft) flushLoop(ctx context.Context) {
 			rf.doFlush()
 		case <-rf.flushNotifyCh:
             rf.doFlush()
-            ticker.Reset(10 * time.Millisecond)
+            ticker.Reset(3 * time.Millisecond)
 		}
 		
 	}
@@ -212,7 +210,7 @@ func (rf *Raft) monitorLoop() {
         <-ticker.C
         currentCount := atomic.SwapInt64(&rf.writeMetrics, 0)
         if currentCount > 0 {
-            tool.Log.Info("🚀 性能监控 [TPS]", 
+            tool.Log.Info("性能监控", 
                 "ops/s", float64(currentCount)/15,
                 "数量", currentCount, // 估算吞吐量(假设每条1KB)
             )

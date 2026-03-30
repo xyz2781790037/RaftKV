@@ -4,6 +4,7 @@ import (
 	pb "RaftKV/proto/raftpb"
 	"RaftKV/tool"
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,11 +24,14 @@ type RaftPeer struct {
 	id   int64
 }
 type PeerManager struct {
-	mu    sync.RWMutex // 专门保护 peers map
-	peers map[int64]*RaftPeer
-	myID  int64 // 记录自己的 ID，方便遍历时跳过自己
+	mu     sync.RWMutex // 专门保护 peers map
+	peers  map[int64]*RaftPeer
+	myID   int64 // 记录自己的 ID，方便遍历时跳过自己
+	banned map[int64]bool
 }
+
 var maxMsgSize = 1024 * 1024 * 1024
+
 func NewRaftPeer(id int64, addr string) *RaftPeer {
 	rp := &RaftPeer{
 		id:   id,
@@ -42,11 +46,11 @@ func (rp *RaftPeer) Connect() {
 	if rp.conn != nil {
 		rp.conn.Close()
 	}
-	conn, err := grpc.NewClient(rp.addr, grpc.WithTransportCredentials(insecure.NewCredentials()),grpc.WithDefaultCallOptions(
-            grpc.MaxCallRecvMsgSize(maxMsgSize),
-            grpc.MaxCallSendMsgSize(maxMsgSize),
-        ),
-)
+	conn, err := grpc.NewClient(rp.addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultCallOptions(
+		grpc.MaxCallRecvMsgSize(maxMsgSize),
+		grpc.MaxCallSendMsgSize(maxMsgSize),
+	),
+	)
 	if err != nil {
 		tool.Log.Error("Connect failed", "err", err)
 		rp.conn = nil
@@ -97,6 +101,9 @@ func (rp *RaftPeer) CallRequestVote(in *pb.RequestVoteArgs) (*pb.RequestVoteRepl
 
 	reply, err := stub.RequestVote(ctx, in)
 	if err != nil {
+		if strings.Contains(err.Error(), "YOU_ARE_EXILED") {
+			tool.Log.Fatal("收到集群的放逐宣判！本节点已被物理踢除，立刻自我销毁！若要重新加入，请务必清空 data 目录并分配新ID！")
+		}
 		tool.Log.Error("RequestVote failed", "err", err)
 		return nil, false
 	}
@@ -122,8 +129,9 @@ func (rp *RaftPeer) CallInstallSnapshot(in *pb.InstallSnapshotArgs) (*pb.Install
 }
 func NewPeerManager(initialPeers map[int64]string, myID int64) *PeerManager {
 	pm := &PeerManager{
-		mu:   sync.RWMutex{},
-		myID: myID,
+		mu:     sync.RWMutex{},
+		myID:   myID,
+		banned: make(map[int64]bool),
 	}
 	pm.peers = make(map[int64]*RaftPeer, len(initialPeers))
 	for id, addr := range initialPeers {
@@ -134,7 +142,10 @@ func NewPeerManager(initialPeers map[int64]string, myID int64) *PeerManager {
 func (pm *PeerManager) AddPeer(id int64, addr string) bool {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-
+	if pm.banned[id] {
+		tool.Log.Error("拒绝将已永久拉黑的 NodeID 重新加入集群。请分配全新的 NodeID！", "id", id)
+		return false
+	}
 	if _, exists := pm.peers[id]; exists {
 		return false
 	}
@@ -148,9 +159,15 @@ func (pm *PeerManager) RemovePeer(id int64) {
 	if rp, exist := pm.peers[id]; exist {
 		rp.Close()
 		delete(pm.peers, id)
+		pm.banned[id] = true
 		tool.Log.Info("PeerManager: Removed node", "id", id)
 	}
 
+}
+func (pm *PeerManager) IsBanned(id int64) bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	return pm.banned[id]
 }
 func (pm *PeerManager) GetPeer(id int64) (*RaftPeer, bool) {
 	pm.mu.RLock()
@@ -178,25 +195,25 @@ func (pm *PeerManager) ListIDs() []int64 {
 	defer pm.mu.RUnlock()
 	// 0个有效数据会优先使用这些数据
 	ids := make([]int64, 0, len(pm.peers))
-	for id := range pm.peers{
+	for id := range pm.peers {
 		ids = append(ids, id)
 	}
 	return ids
 }
-func (pm *PeerManager) PeerCount() int{
+func (pm *PeerManager) PeerCount() int {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	return len(pm.peers)
 }
-func (pm *PeerManager) QuorumSize() int{
+func (pm *PeerManager) QuorumSize() int {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
-	return len(pm.peers)/2 + 1
+	return (len(pm.peers))/2 + 1
 }
-func (pm *PeerManager) CloseAll(){
+func (pm *PeerManager) CloseAll() {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
-	for _,peer := range pm.peers{
+	for _, peer := range pm.peers {
 		peer.Close()
 	}
 }

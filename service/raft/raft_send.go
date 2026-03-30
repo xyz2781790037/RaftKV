@@ -5,6 +5,7 @@ import (
 	"RaftKV/tool"
 	"fmt"
 	"sort"
+	"sync/atomic"
 )
 
 const MaxLogEntriesPerRPC = 2000
@@ -15,25 +16,81 @@ func (rf *Raft) sendRequestVote() {
 		rf.mu.Unlock()
 		return
 	}
+
+
+	futureTerm := rf.currentTerm + 1
+	lastLogIndex := rf.getLastLogIndex()
+	lastLogTerm := rf.getLastLogTerm()
+	me := rf.me
+	rf.mu.Unlock()
+
+	preVoteArgs := pb.RequestVoteArgs{
+		Term:         futureTerm,
+		CandidateId:  me,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
+		IsPreVote:    true, // 记为预投票
+	}
+
+	peers := rf.peers.CloneList()
+	var preVotes int32 = 1 // 预先给自己投一票
+
+	for _, peer := range peers {
+		go func(peer *RaftPeer) {
+			reply, ok := peer.CallRequestVote(&preVoteArgs)
+			if !ok {
+				return
+			}
+
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+			if rf.killed() || rf.state == Leader {
+				return
+			}
+
+			if reply.Term > rf.currentTerm {
+				rf.becomeFollower(reply.Term)
+				rf.persist()
+				return
+			}
+
+			if reply.VoteGranted {
+				votes := atomic.AddInt32(&preVotes, 1)
+				// 一旦预投票获得多数派同意，立即转入正式选举！
+				if votes == int32(rf.peers.QuorumSize()) {
+					go rf.startRealElection()
+				}
+			}
+		}(peer)
+	}
+}
+
+func (rf *Raft) startRealElection() {
+	rf.mu.Lock()
+	if rf.killed() || rf.state == Leader {
+		rf.mu.Unlock()
+		return
+	}
 	rf.becomeCandidate()
 	rf.resetElectionTimer()
+
 	args := pb.RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateId:  rf.me,
 		LastLogIndex: rf.getLastLogIndex(),
 		LastLogTerm:  rf.getLastLogTerm(),
+		IsPreVote:    false, 
 	}
 	rf.mu.Unlock()
+
 	peers := rf.peers.CloneList()
-	for _,peer := range peers {
-		if peer.id == rf.me {
-			continue
-		}
+	for _, peer := range peers {
 		go func(peer *RaftPeer) {
 			reply, ok := peer.CallRequestVote(&args)
 			if !ok {
 				return
 			}
+
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 			if rf.killed() || rf.currentTerm != args.Term || rf.state != Candidate || rf.votedFor != args.CandidateId {
@@ -41,7 +98,6 @@ func (rf *Raft) sendRequestVote() {
 			}
 			if reply.Term > rf.currentTerm {
 				rf.becomeFollower(reply.Term)
-				tool.Log.Info("调用persist in send ")
 				rf.persist()
 				return
 			}
@@ -79,21 +135,17 @@ func (rf *Raft) sendAppendEntries(isHeartbeat bool) {
 			}
 			i := peer.id
 			nextIndex := rf.nextIndex[i]
-			
-			if !isHeartbeat && nextIndex <= rf.lastIncludedIndex {
+			if nextIndex <= rf.lastIncludedIndex {
 				rf.mu.Unlock()
 				go rf.sendInstallSnapshot(i, peer)
 				return
 			}
-			
-			if isHeartbeat && nextIndex <= rf.lastIncludedIndex {
-				nextIndex = rf.getLastLogIndex() + 1
-			}
+
 
 			prevLogIndex := nextIndex - 1
 			prevLogTerm := rf.getLogTerm(prevLogIndex)
 			var entries []*pb.LogEntry
-			if !isHeartbeat && nextIndex <= rf.getLastLogIndex() {
+			if nextIndex <= rf.getLastLogIndex() {
 				entries = rf.getEntriesToSend(nextIndex)
 			}
 			rf.mu.Unlock()
@@ -106,7 +158,7 @@ func (rf *Raft) sendAppendEntries(isHeartbeat bool) {
 				Entries:      entries,
 				LeaderCommit: leaderCommit,
 			}
-			
+
 			reply, ok := peer.CallAppendEntries(&args)
 			if !ok {
 				return
@@ -122,15 +174,12 @@ func (rf *Raft) sendAppendEntries(isHeartbeat bool) {
 				rf.persist()
 				return
 			}
-			if isHeartbeat {
-				return
-			}
 
 			if reply.Success {
 				rf.matchIndex[i] = prevLogIndex + int64(len(args.Entries))
 				rf.nextIndex[i] = rf.matchIndex[i] + 1
 				rf.updateCommitIndex()
-				
+
 				if len(entries) == 0 {
 					heartbeatAckCount++
 					if heartbeatAckCount >= rf.peers.QuorumSize() && !notified {
@@ -156,6 +205,7 @@ func (rf *Raft) sendAppendEntries(isHeartbeat bool) {
 						rf.nextIndex[i] = reply.ConflictIndex
 					}
 				}
+				go rf.sendHeartbeatAtOnce()
 			}
 		}(peer)
 	}
@@ -234,7 +284,7 @@ func (rf *Raft) updateCommitIndex() {
 	// 比如 5 个节点，len/2 = 2，取排序后第 3 个
 	// 这个位置的值，保证了至少有 (N/2 + 1) 个节点达到了这个值
 	quorum := rf.peers.QuorumSize()
-    newCommitIndex := matchIndexes[len(allIDs) - quorum]
+	newCommitIndex := matchIndexes[len(allIDs)-quorum]
 
 	// 4. 检查 Term (Raft 论文 Figure 8 的限制)
 	// 只有当前 Term 的日志被复制过半，才能提交
@@ -316,7 +366,7 @@ func (rf *Raft) becomeLeader() {
 		rf.nextIndex[id] = lastLogIndex + 1
 		rf.matchIndex[id] = 0
 	}
-	go func(){
+	go func() {
 		rf.Propose(nil)
 	}()
 	fmt.Println("\033[1;36m", rf.me, "become new Leader", "Term=", rf.currentTerm, "\033[0m")

@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -25,17 +24,16 @@ type StartOptions struct {
 	Peers        *raft.PeerManager // 邻居列表
 	DataDir      string            // "data"
 	MaxRaftState int64
+	GID          int64    
+	MasterAddrs  []string
 }
 
 // Server: 包含“运行时组件” + “配置信息”
 type Server struct {
-	// 运行时组件 (Runtime)
 	GrpcServer *grpc.Server
 	KVServer   *kvraft.KVServer
 	Listener   net.Listener
-
-	// 配置信息 (Config) - 直接把 Options 存一份在这里
-	Options StartOptions
+	Options    StartOptions
 }
 
 var maxMsgSize = 1024 * 1024 * 1024
@@ -46,7 +44,8 @@ func ServerStart(opts StartOptions) (*Server, error) {
 		return nil, fmt.Errorf("failed to create dir %s: %v", nodeDir, err)
 	}
 	persister := storage.NewRaftStorage(nodeDir, opts.NodeID)
-	kv := kvraft.StartKVServer(opts.Peers, opts.NodeID, persister, opts.MaxRaftState)
+	kv := kvraft.StartKVServer(opts.Peers, opts.NodeID, persister, opts.MaxRaftState, opts.GID, opts.MasterAddrs)
+	
 	lis, err := net.Listen("tcp", opts.Port)
 	if err != nil {
 		tool.Log.Error("Listen failed", "err", err)
@@ -56,10 +55,12 @@ func ServerStart(opts StartOptions) (*Server, error) {
 		grpc.MaxRecvMsgSize(maxMsgSize),
 		grpc.MaxSendMsgSize(maxMsgSize),
 	)
+	
 	// 注册 KV 服务 (供客户端调用)
 	kvpb.RegisterRaftKVServer(s, kv)
 	// 注册 Raft 服务 (供其他节点调用 CallAppendEntries 等)
 	pb.RegisterRaftServer(s, kv.GetRaft())
+	
 	tool.Log.Info("Server started", "id", opts.NodeID, "port", opts.Port)
 	go func() {
 		s.Serve(lis)
@@ -74,7 +75,7 @@ func ServerStart(opts StartOptions) (*Server, error) {
 func (s *Server) Stop() {
 	tool.Log.Info("Stopping Server...", "ID", s.Options.NodeID)
 
-	// 1. 停止 gRPC 监听 (不再接收新请求)
+	// 1. 停止 gRPC 监听
 	if s.GrpcServer != nil {
 		s.GrpcServer.Stop()
 	}
@@ -87,49 +88,45 @@ func (s *Server) Stop() {
 }
 func (s *Server) WaitForExit() {
 	sigCh := make(chan os.Signal, 1)
-	// 监听 Ctrl+C (Interrupt) 和 kill (SIGTERM)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	// 阻塞在这里，直到收到信号
 	<-sigCh
-
-	// 收到信号后，自动调用 Stop
 	s.Stop()
 }
 func ParseFlags() (StartOptions, bool) {
-	// 定义 flag
 	nodeID := flag.Int64("id", 1, "ID of this node")
 	port := flag.String("port", ":8001", "Port to listen on")
-	peersRaw := flag.String("peers", "", "Peers list (e.g. 1=localhost:8001,2=localhost:8002)")
+	gid := flag.Int64("gid", 100, "Replica Group ID") // 新增 GID
+	peersRaw := flag.String("peers", "127.0.0.1:8001,127.0.0.1:8002,127.0.0.1:8003", "Peers list (comma separated)")
+	mastersRaw := flag.String("masters", "127.0.0.1:9001,127.0.0.1:9002,127.0.0.1:9003", "ShardMaster list") // 新增 Masters
 	dataDir := flag.String("dir", "data", "Data directory")
-	maxState := flag.Int64("maxstate", 100 * 1024 * 1024, "Max Raft State size before snapshot")
-	// 解析
+	maxState := flag.Int64("maxstate", 100*1024*1024, "Max Raft State size")
 	flag.Parse()
-
-	// 验证必填项
-	if *peersRaw == "" {
-		fmt.Println("Error: -peers argument is required")
-		flag.Usage()
-		return StartOptions{}, false
-	}
-
-	// 处理 peers 字符串转 map
 	peersMap := make(map[int64]string)
-
 	parts := strings.Split(*peersRaw, ",")
-	for _, p := range parts {
-		kv := strings.Split(p, "=")
-		if len(kv) == 2 {
-			pid, _ := strconv.ParseInt(kv[0], 10, 64)
-			peersMap[pid] = kv[1]
+	for i, p := range parts {
+		addr := strings.TrimSpace(p)
+		if addr != "" {
+			peersMap[int64(i+1)] = addr
 		}
 	}
 	peers := raft.NewPeerManager(peersMap, *nodeID)
+
+	// 2. 解析大脑的机器列表
+	var masterAddrs []string
+	for _, m := range strings.Split(*mastersRaw, ",") {
+		addr := strings.TrimSpace(m)
+		if addr != "" {
+			masterAddrs = append(masterAddrs, addr)
+		}
+	}
+
 	return StartOptions{
 		NodeID:       *nodeID,
 		Port:         *port,
 		Peers:        peers,
 		DataDir:      *dataDir,
 		MaxRaftState: *maxState,
+		GID:          *gid,
+		MasterAddrs:  masterAddrs,
 	}, true
 }

@@ -22,6 +22,7 @@ const (
 	Follower
 	Candidate
 )
+
 type Raft struct {
 	mu    sync.Mutex     // Lock to protect shared access to this peer's state
 	peers *PeerManager   // RPC end point64s of all peers
@@ -52,11 +53,11 @@ type Raft struct {
 	applyCh               chan raftapi.ApplyMsg
 	applyCond             *sync.Cond // 用于通知 ApplyMsg 的条件变量
 	// for 3D
-	lastIncludedIndex 	  int64 // 快照的最后一个日志条目索引 // 所有以rf.log为基础的索引都要减去这个值
+	lastIncludedIndex     int64 // 快照的最后一个日志条目索引 // 所有以rf.log为基础的索引都要减去这个值
 	lastIncludedTerm      int64 // 快照的最后一个日志条目任期
 	batchLogs             []*pb.LogEntry
 	flushCancel           context.CancelFunc
-	writeMetrics 		  int64
+	writeMetrics          int64
 	lastResetElectionTime time.Time
 }
 
@@ -88,6 +89,10 @@ func (rf *Raft) ReadIndex() (int64, bool) {
 		rf.mu.Unlock()
 		return -1, false
 	}
+	// if rf.getLogTerm(rf.commitIndex) != rf.currentTerm {
+	// 	rf.mu.Unlock()
+	// 	return -1, false
+	// }
 	readIndex := rf.commitIndex
 	notifyCh := rf.readIndexNotifyCh
 	rf.sendHeartbeatAtOnce()
@@ -115,7 +120,7 @@ func (rf *Raft) GetRaftStateSize() int64 {
 	// 你需要调用存储层的接口来获取当前字节数
 	// 如果你的 store 封装了 persister，通常是 store.RaftStateSize()
 	return rf.store.RaftStateSize()
-}
+}	
 func (rf *Raft) persist() {
 	// tool.Log.Info("调用Save in persist")
 	rf.store.State.SaveState(rf.currentTerm, rf.votedFor)
@@ -196,10 +201,9 @@ func (rf *Raft) Snapshot(index int64, snapshot []byte) {
 	tool.Log.Debug("调用Save in snapshot (Async IO)")
 	rf.mu.Lock()
 	defer rf.mu.Unlock() // 确保退出时解
-	
+
 	rf.store.Log.RewriteLogs(rf.log)
 
-	// 6. 收尾工作
 	if rf.state == Leader {
 		rf.sendHeartbeatAtOnce()
 	}
@@ -230,18 +234,17 @@ func (rf *Raft) Propose(command proto.Message) (int64, int64, bool) {
 	log := &pb.LogEntry{
 		Term:    term,
 		Command: cmdBytes,
-	}
+	}			
 	rf.log = append(rf.log, log)
 	rf.batchLogs = append(rf.batchLogs, log)
-	const BatchThreshold = 200 
-    
-    if len(rf.batchLogs) >= BatchThreshold {
-        select {
-        case rf.flushNotifyCh <- struct{}{}:
-        default:
-            // 如果通道满了，说明已经有人通知了，不用阻塞
-        }
-    }
+	const BatchThreshold = 1
+
+	if len(rf.batchLogs) >= BatchThreshold {
+		select {
+		case rf.flushNotifyCh <- struct{}{}:
+		default:
+		}
+	}
 	// tool.Log.Info("no调用persist in start() ")
 	// 立马发送心跳
 	rf.sendHeartbeatAtOnce()
@@ -262,10 +265,11 @@ func (rf *Raft) doFlush() {
 	atomic.AddInt64(&rf.writeMetrics, int64(batchLen))
 }
 func (rf *Raft) Shutdown() {
-	atomic.StoreInt32(&rf.dead, 1)
-	close(rf.shutdownCh)
-	if rf.flushCancel != nil {
-		rf.flushCancel()
+	if atomic.CompareAndSwapInt32(&rf.dead, 0, 1) {
+		close(rf.shutdownCh)
+		if rf.flushCancel != nil {
+			rf.flushCancel()
+		}
 	}
 }
 
@@ -327,26 +331,28 @@ func RandomElectionTimeout() time.Duration {
 func StableHeartbeatTimeout() time.Duration {
 	return time.Duration(HeartbeatTimeout) * time.Millisecond
 }
-func (rf *Raft) AddNode(id int64, addr string) {
-	isNew := rf.peers.AddPeer(id, addr)
-
-	// 2. 共识层状态初始化 (Raft 自己的逻辑)
-	if isNew && rf.state == Leader {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
-		// 初始化新节点的进度
-		rf.nextIndex[id] = rf.getLastLogIndex() + 1
-		rf.matchIndex[id] = 0
-	}
-}
-// 封装业务层的 RemoveServer
-func (rf *Raft) RemoveNode(id int64) {
-	// 1. 网络层移除
-	rf.peers.RemovePeer(id)
-
-	// 2. 共识层清理
+func (rf *Raft) AddNode(nodeId int64, addr string) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	delete(rf.nextIndex, id)
-	delete(rf.matchIndex, id)
+
+	if rf.peers.AddPeer(nodeId, addr) {
+
+		if rf.state == Leader {
+			rf.nextIndex[nodeId] = rf.getLastLogIndex() + 1
+			rf.matchIndex[nodeId] = 0
+		}
+		tool.Log.Info("Raft 集群已成功接入新节点", "NodeId", nodeId, "Addr", addr)
+	}
+}
+
+func (rf *Raft) RemoveNode(nodeId int64) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.peers.RemovePeer(nodeId)
+	if rf.state == Leader {
+		delete(rf.nextIndex, nodeId)
+		delete(rf.matchIndex, nodeId)
+	}
+	tool.Log.Info("Raft 集群已将节点安全移除", "NodeId", nodeId)
 }
