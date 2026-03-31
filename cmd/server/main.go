@@ -17,7 +17,7 @@ func main() {
 	if !ok{
 		os.Exit(1)
 	}
-	fmt.Printf("📌 進程 PID: %d\n", os.Getpid())
+	fmt.Printf("进程 PID: %d\n", os.Getpid())
 	server,err := server.ServerStart(opts)
 	if err != nil{
 		tool.Log.Error("server start failed!","err",err)

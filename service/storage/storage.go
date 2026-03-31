@@ -139,7 +139,7 @@
 //             return
 //         }
 //     }
-    
+
 //     if err := w.Flush(); err != nil {
 //         tool.Log.Error("AppendLog flush error", "err", err)
 //         return
@@ -160,7 +160,7 @@
 // 	}
 // 	defer f.Close()
 
-// 	w := bufio.NewWriterSize(f, 4096) 
+// 	w := bufio.NewWriterSize(f, 4096)
 
 // 	lenBuf := make([]byte, 4)
 // 	for _, entry := range logs {
@@ -169,9 +169,9 @@
 // 			continue
 // 		}
 // 		binary.LittleEndian.PutUint32(lenBuf, uint32(len(data)))
-		
+
 // 		// 这里的 Write 是写内存 buffer，极快
-// 		if _, err := w.Write(lenBuf); err != nil { 
+// 		if _, err := w.Write(lenBuf); err != nil {
 // 			return
 // 		}
 // 		if _, err := w.Write(data); err != nil {
@@ -182,7 +182,7 @@
 // 		tool.Log.Error("RewriteLogs flush error", "err", err)
 // 		return
 // 	}
-    
+
 //     // 确保落盘
 //     f.Sync()
 // }
@@ -209,7 +209,7 @@
 //         return
 //     }
 //     defer f.Close()
-    
+
 //     if _, err := f.Write(stateData); err != nil {
 //         tool.Log.Error("Failed to write snapshot", "err", err)
 //         return
@@ -218,7 +218,7 @@
 //         tool.Log.Error("Failed to sync snapshot", "err", err)
 //         return
 //     }
-    
+
 // 	tool.Log.Info("succeed to write in snapshot")
 // }
 
@@ -311,19 +311,20 @@
 // //             return
 // //         }
 // //     }
-    
+
 // //     f.Sync()
 // // }
-// func (s *Store) RaftStateSize() int64 {
-//     var totalSize int64 = 0
-//     if info, err := os.Stat(s.State.filePath); err == nil {
-//         totalSize += info.Size()
-//     }
-//     if info, err := os.Stat(s.Log.filePath); err == nil {
-//         totalSize += info.Size()
-//     }
-//     return totalSize
-// }
+//
+//	func (s *Store) RaftStateSize() int64 {
+//	    var totalSize int64 = 0
+//	    if info, err := os.Stat(s.State.filePath); err == nil {
+//	        totalSize += info.Size()
+//	    }
+//	    if info, err := os.Stat(s.Log.filePath); err == nil {
+//	        totalSize += info.Size()
+//	    }
+//	    return totalSize
+//	}
 package storage
 
 import (
@@ -359,16 +360,15 @@ func (s *Store) RaftStateSize() int64 {
 	if info, err := os.Stat(s.State.filePath); err == nil {
 		totalSize += info.Size()
 	}
-	
+
 	// 从内存中直接获取安全精准的大小
 	s.Log.mu.Lock()
 	totalSize += s.Log.offset
 	s.Log.mu.Unlock()
-	
+
 	return totalSize
 }
 
-// =================== State Store ===================
 
 type StateStore struct {
 	mu       sync.Mutex
@@ -437,18 +437,15 @@ func (s *StateStore) LoadState() (term int64, votedFor int64, ok bool) {
 	}
 	return rs.CurrentTerm, rs.VotedFor, true
 }
-
-// =================== Log Store (Append-Only 重构版) ===================
-
 type LogStore struct {
 	mu           sync.Mutex
 	filePath     string
 	snapshotPath string
-	
-	fd           *os.File            // 常驻文件句柄，避免反复 Open/Close
-	entries      []*pb.LogEntry      // 内存镜像，用于智能比对
-	offsetMap    map[uint64]int64    // Index -> 文件物理起始 Offset
-	offset       int64               // 当前文件的真实写入游标
+
+	fd        *os.File         // 常驻文件句柄，避免反复 Open/Close
+	entries   []*pb.LogEntry   // 内存镜像，用于智能比对
+	offsetMap map[uint64]int64 // Index -> 文件物理起始 Offset
+	offset    int64            // 当前文件的真实写入游标
 }
 
 func NewLogStore(dataDir string, nodeID int64) *LogStore {
@@ -487,13 +484,14 @@ func (l *LogStore) LoadLogs() ([]*pb.LogEntry, bool) {
 	for {
 		startOffset := l.offset
 		if _, err := io.ReadFull(l.fd, lenBuf); err != nil {
-			if err == io.EOF { break }
-			// 🚨 发生断电脏写，安全截断受损尾部
+			if err == io.EOF {
+				break
+			}
 			tool.Log.Warn("LoadLogs: Detected torn write, truncating tail", "offset", startOffset)
 			l.fd.Truncate(startOffset)
 			break
 		}
-		
+
 		size := binary.LittleEndian.Uint32(lenBuf)
 		data := make([]byte, size)
 		if _, err := io.ReadFull(l.fd, data); err != nil {
@@ -519,13 +517,12 @@ func (l *LogStore) LoadLogs() ([]*pb.LogEntry, bool) {
 	return res, true
 }
 
-// RewriteLogs 智能重写引擎（核心魔改点）
+// RewriteLogs 智能重写引擎
 // 外部 Raft 依然传入全量数组，但底层只做 $O(N)$ 增量写入或 $O(1)$ 截断
 func (l *LogStore) RewriteLogs(logs []*pb.LogEntry) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// 1. 如果 Raft 传了空数组，清空一切
 	if len(logs) == 0 {
 		l.fd.Truncate(0)
 		l.fd.Seek(0, io.SeekStart)
@@ -538,11 +535,10 @@ func (l *LogStore) RewriteLogs(logs []*pb.LogEntry) {
 	canIncremental := false
 	matchLen := 0
 
-	// 2. 检查能否进行增量操作（第一条日志的 Index 和内部一致）
 	if len(l.entries) > 0 && logs[0].Index == l.entries[0].Index {
 		canIncremental = true
 		for i := 0; i < len(logs) && i < len(l.entries); i++ {
-			// 找到最长一致前缀
+
 			if logs[i].Index == l.entries[i].Index && logs[i].Term == l.entries[i].Term {
 				matchLen++
 			} else {
@@ -552,16 +548,12 @@ func (l *LogStore) RewriteLogs(logs []*pb.LogEntry) {
 	}
 
 	if canIncremental {
-		// 【完美命中】Raft 传进来的数组和磁盘一模一样，直接返回，0 磁盘开销！
 		if matchLen == len(logs) && matchLen == len(l.entries) {
 			return
 		}
-
-		// 【遇到截断/回退】Raft 要丢弃部分尾部日志
 		var truncOffset int64 = 0
 		if matchLen > 0 {
 			if matchLen < len(l.entries) {
-				// 获取第一条需要丢弃日志的物理偏移量
 				firstMismatchIndex := l.entries[matchLen].Index
 				truncOffset = l.offsetMap[uint64(firstMismatchIndex)]
 			} else {
@@ -570,13 +562,12 @@ func (l *LogStore) RewriteLogs(logs []*pb.LogEntry) {
 		}
 
 		if truncOffset != l.offset {
-			l.fd.Truncate(truncOffset) // O(1) 修改文件系统元数据，瞬间斩断
+			l.fd.Truncate(truncOffset)
 			l.fd.Seek(truncOffset, io.SeekStart)
 			l.offset = truncOffset
 		}
 		l.entries = l.entries[:matchLen]
 
-		// 【追加新日志】把超出 matchLen 后的新日志一把追加
 		newLogs := logs[matchLen:]
 		if len(newLogs) > 0 {
 			l.appendLogsLocked(newLogs)
@@ -585,7 +576,6 @@ func (l *LogStore) RewriteLogs(logs []*pb.LogEntry) {
 		return
 	}
 
-	// 3. 【触发回退机制】Raft 做了快照 (Snapshot)，日志前缀被截断了，需要一次全量覆盖写
 	l.fd.Truncate(0)
 	l.fd.Seek(0, io.SeekStart)
 	l.entries = make([]*pb.LogEntry, 0, len(logs))
@@ -619,14 +609,14 @@ func (l *LogStore) appendLogsLocked(logs []*pb.LogEntry) {
 
 		data, _ := proto.Marshal(entry)
 		binary.LittleEndian.PutUint32(sizeBuf[:], uint32(len(data)))
-		
+
 		buf = append(buf, sizeBuf[:]...)
 		buf = append(buf, data...)
 
 		l.entries = append(l.entries, entry)
 		l.offset += int64(4 + len(data))
 	}
-	
+
 	// 一把梭哈进内核
 	l.fd.Write(buf)
 }
